@@ -11,6 +11,7 @@ $(mkdir -p $(dirname $1))
 
 if [ $? -eq 1 ]
 then
+	echo "The directories could not be created."
 	exit 1
 fi
 

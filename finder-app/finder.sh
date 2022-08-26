@@ -15,6 +15,6 @@ fi
 NUMBER_OF_FILES=$(find $1 -type f | wc -l)
 
 #Expression based on the following reference: https://stackoverflow.com/questions/16956810/how-to-find-all-files-containing-specific-text-string-on-linux
-LINE_COUNT=$(grep -rnw $1 -e $2 | wc -l)
+LINE_COUNT=$(grep -rn $1 -e $2 | wc -l)
 
 echo "The number of files are ${NUMBER_OF_FILES} and the number of matching lines are ${LINE_COUNT}"
