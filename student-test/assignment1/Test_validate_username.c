@@ -20,5 +20,5 @@ void test_validate_my_username()
     
     
     //After using "username", the pointer has to be freed
-    free(username);
+    free((void *)username);
 }
