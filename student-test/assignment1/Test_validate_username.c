@@ -17,4 +17,8 @@ void test_validate_my_username()
     const char *expected_username = my_username();
     const char *username = malloc_username_from_conf_file();
     TEST_ASSERT_EQUAL_STRING(username,expected_username);
+    
+    
+    //After using "username", the pointer has to be freed
+    free(username);
 }
