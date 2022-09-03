@@ -60,7 +60,7 @@ void main(int c, char **argv)
     syslog(LOG_DEBUG, "Writing %s to %s.", string, filename);
 
     //Create the file, overwriting if it exists, and with write-only privileges
-    int fd = open(filename, O_CREAT | O_TRUNC | O_WRONLY);
+    int fd = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0666);
     //Check if an error has occurred
     if(fd == -1)
     {
