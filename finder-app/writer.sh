@@ -3,7 +3,7 @@
 usage() {
 	echo "Command: $0 $1 $2"
 	echo "Usage: $0 <path_and_filename> <string>"
-	echo "Funcionality: creates a file in <path_and_filename> and writes <string> into it"
+	echo "Functionality: creates a file in <path_and_filename> and writes <string> into it"
 }
 
 #Check that two arguments have been provided

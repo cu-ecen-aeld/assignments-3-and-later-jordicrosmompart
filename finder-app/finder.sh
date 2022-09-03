@@ -3,7 +3,7 @@
 usage() {
 	echo "Command: $0 $1 $2"
 	echo "Usage: $0 <searchdir> <searchstring>"
-	echo "Funcionality: search for files in <searchdir> that contain <searchstring>"
+	echo "Functionality: search for files in <searchdir> that contain <searchstring>"
 }
 
 #Check that two arguments have been provided
