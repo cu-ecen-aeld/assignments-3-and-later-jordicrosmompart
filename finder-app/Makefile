@@ -11,3 +11,4 @@ all: $(INCLUDES)
 
 clean:
 	rm -f $(OUTPUT)
+	rm -f *.o
