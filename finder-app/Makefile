@@ -10,4 +10,4 @@ all: $(INCLUDES)
 	$(CROSS_COMPILE)gcc $(INCLUDES) -o $(OUTPUT)
 
 clean:
-	rm $(OUTPUT)
+	rm -f $(OUTPUT)
