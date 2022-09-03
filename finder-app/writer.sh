@@ -1,19 +1,31 @@
 #!/bin/bash
 
+usage() {
+	echo "Command: $0 $1 $2"
+	echo "Usage: $0 <path_and_filename> <string>"
+	echo "Funcionality: creates a file in <path_and_filename> and writes <string> into it"
+}
+
+#Check that two arguments have been provided
 if [ ! $# -eq 2 ]
 then
-	echo "You must provide two arguments. First is the full filename to be created and second the string to appended into it."
+	usage
 	exit 1
 fi
 
-#Expression based on the following reference: https://www.baeldung.com/linux/create-folder-path-file
-$(mkdir -p $(dirname $1))
+#Use variables instead of the command arguments. This implies easier refactor of the code
+PATH_FILENAME=$1
+STRING=$2
 
+#Expression based on the following reference: https://www.baeldung.com/linux/create-folder-path-file
+$(mkdir -p $(dirname $PATH_FILENAME))
+
+#Check if there has been an error creating the directory
 if [ $? -eq 1 ]
 then
 	echo "The directories could not be created."
 	exit 1
 fi
 
-$(echo $2 > $1)
+$(echo $STRING > $PATH_FILENAME)
 
