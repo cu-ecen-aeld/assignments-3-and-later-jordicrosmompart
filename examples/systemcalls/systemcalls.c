@@ -61,7 +61,7 @@ bool do_system(const char *cmd)
 		}
 		else
 		{
-			//Syslog the return value  (default facility)
+			//Syslog the return value (default facility)
 			syslog(LOG_DEBUG, "The command %s ran successfully and it returned %d.", cmd, ret_val);
 			return true;
 		}
@@ -70,7 +70,7 @@ bool do_system(const char *cmd)
 }
 
 /**
-* This functions is used as a wrapper for do_exec and do_exec_redirect, and takes a variable
+* This function is used by both do_exec and do_exec_redirect, and takes a variable
 * number of arguments already parsed into an array of commands.
 * @param command - A list of 1 or more arguments after the @param count argument.
 *   The first is always the full path to the command to execute with execv()
@@ -80,7 +80,7 @@ bool do_system(const char *cmd)
 *   fork, waitpid, or execv() command, or if a non-zero return value was returned
 *   by the command issued in @param arguments with the specified arguments.
 */
-static bool wrapper_do_exec(char **command)
+static bool call_exec(char **command)
 {
 /*
  *   Execute a system command by calling fork, execv(),
@@ -150,10 +150,7 @@ static bool wrapper_do_exec(char **command)
 * @param ... - A list of 1 or more arguments after the @param count argument.
 *   The first is always the full path to the command to execute with execv()
 *   The remaining arguments are a list of arguments to pass to the command in execv()
-* @return true if the command @param ... with arguments @param arguments were executed successfully
-*   using the execv() call, false if an error occurred, either in invocation of the
-*   fork, waitpid, or execv() command, or if a non-zero return value was returned
-*   by the command issued in @param arguments with the specified arguments.
+* @return the result of call_exec(); see its documentations above
 */
 
 bool do_exec(int count, ...)
@@ -171,7 +168,7 @@ bool do_exec(int count, ...)
     command[count] = NULL;
 	va_end(args);
     
-    return wrapper_do_exec(command);
+    return call_exec(command);
 }
 
 /**
@@ -210,5 +207,5 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 		return false;
 	}
 	
-	return wrapper_do_exec(command);
+	return call_exec(command);
 }
