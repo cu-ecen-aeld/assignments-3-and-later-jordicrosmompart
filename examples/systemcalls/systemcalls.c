@@ -70,6 +70,79 @@ bool do_system(const char *cmd)
 }
 
 /**
+* This functions is used as a wrapper for do_exec and do_exec_redirect, and takes a variable
+* number of arguments already parsed into an array of commands.
+* @param command - A list of 1 or more arguments after the @param count argument.
+*   The first is always the full path to the command to execute with execv()
+*   The remaining arguments are a list of arguments to pass to the command in execv()
+* @return true if the command @param ... with arguments @param arguments were executed successfully
+*   using the execv() call, false if an error occurred, either in invocation of the
+*   fork, waitpid, or execv() command, or if a non-zero return value was returned
+*   by the command issued in @param arguments with the specified arguments.
+*/
+static bool wrapper_do_exec(char **command)
+{
+/*
+ *   Execute a system command by calling fork, execv(),
+ *   and wait instead of system (see LSP page 161).
+ *   Use the command[0] as the full path to the command to execute
+ *   (first argument to execv), and use the remaining arguments
+ *   as second argument to the execv() command.
+ *
+*/
+	int fork_ret = fork();
+	if(fork_ret == -1)
+	{
+		syslog(LOG_ERR, "Unable to perform fork: %s.", strerror(errno));
+		return false;
+	}
+	else if(fork_ret == 0)
+	{
+		//Child process, execute the other process
+		execv(command[0], command);
+		syslog(LOG_ERR, "execv failed: %s.", strerror(errno));
+		exit(1);
+	}
+
+	//Wait for the child process to finalize
+	int status;
+	int wait_ret = waitpid(fork_ret, &status, 0);
+	if(wait_ret == -1)
+	{
+		syslog(LOG_ERR, "waitpid() failed: %s.", strerror(errno));
+		return false;
+	}
+	else if(wait_ret == fork_ret)
+	{
+		if(WIFEXITED(status))
+		{
+			//Execution finished calling exit.
+			//The value matters to this function
+			if(WEXITSTATUS(status) == 0)
+			{
+				syslog(LOG_DEBUG, "Child process finalized successfully.");
+				return true;
+			}
+			else
+			{
+				syslog(LOG_ERR, "Child process exited with a non-zero value."); 
+				return false;
+			}
+		}
+		else
+		{
+			syslog(LOG_ERR, "Child process did not reach the end of its execution normally.");
+			return false;
+		}
+	}
+	else
+	{
+		syslog(LOG_ERR, "waitpid() returned an unexpected result.");
+    	return false;
+	}
+}
+
+/**
 * @param count -The numbers of variables passed to the function. The variables are command to execute.
 *   followed by arguments to pass to the command
 *   Since exec() does not perform path expansion, the command to execute needs
@@ -96,67 +169,9 @@ bool do_exec(int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-
-/*
- *   Execute a system command by calling fork, execv(),
- *   and wait instead of system (see LSP page 161).
- *   Use the command[0] as the full path to the command to execute
- *   (first argument to execv), and use the remaining arguments
- *   as second argument to the execv() command.
- *
-*/
-	int fork_ret = fork();
-	if(fork_ret == -1)
-	{
-		syslog(LOG_ERR, "Unable to perform fork: %s.", strerror(errno));
-		return false;
-	}
-	else if(fork_ret == 0)
-	{
-		//Child process, execute the other process
-		execv(command[0], command);
-		syslog(LOG_ERR, "execv failed: %s.", strerror(errno));
-		return false;
-	}
-
-    va_end(args);
-
-	//Wait for the child process to finalize
-	int status;
-	int wait_ret = waitpid(fork_ret, &status, 0);
-	if(wait_ret == -1)
-	{
-		syslog(LOG_ERR, "waitpid() failed: %s.", strerror(errno));
-		return false;
-	}
-	else if(wait_ret == fork_ret)
-	{
-		if(WIFEXITED(status))
-		{
-			//Execution finished calling exit.
-			//The value matters to this function
-			if(WEXITSTATUS(status) != 0)
-			{
-				syslog(LOG_ERR, "Child process exited with a non-zero value."); 
-				return false;
-			}
-			else
-			{
-				syslog(LOG_DEBUG, "Child process finalized successfully.");
-				return true;
-			}
-		}
-		else
-		{
-			syslog(LOG_ERR, "Child process did not reach the end of its execution normally.");
-			return false;
-		}
-	}
-	else
-	{
-		syslog(LOG_ERR, "waitpid() returned an unexpected result.");
-    	return false;
-	}
+	va_end(args);
+    
+    return wrapper_do_exec(command);
 }
 
 /**
@@ -175,11 +190,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
-
+	va_end(args);
 /*
  *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
  *   redirect standard out to a file specified by outputfile.
@@ -199,10 +210,5 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 		return false;
 	}
 	
-	//Call do_exec
-	bool exec_ret = do_exec(count, args);
-
-    va_end(args);
-
-    return exec_ret;
+	return wrapper_do_exec(command);
 }
