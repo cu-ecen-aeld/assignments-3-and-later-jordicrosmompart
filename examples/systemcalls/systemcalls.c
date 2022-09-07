@@ -115,7 +115,7 @@ bool do_exec(int count, ...)
 	{
 		//Child process, execute the other process
 		execv(command[0], command);
-		syslog(LOG_ERR, "execv all failed: %s.", strerror(errno));
+		syslog(LOG_ERR, "execv failed: %s.", strerror(errno));
 		return false;
 	}
 
@@ -143,6 +143,7 @@ bool do_exec(int count, ...)
 			else
 			{
 				syslog(LOG_DEBUG, "Child process finalized successfully.");
+				return true;
 			}
 		}
 		else
