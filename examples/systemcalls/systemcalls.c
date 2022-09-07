@@ -157,9 +157,6 @@ bool do_exec(int count, ...)
 		syslog(LOG_ERR, "waitpid() returned an unexpected result.");
     	return false;
 	}
-	
-	//This should never reach here, but the compiler complains
-	return false;
 }
 
 /**
