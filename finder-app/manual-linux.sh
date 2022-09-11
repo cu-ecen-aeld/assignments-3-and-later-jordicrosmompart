@@ -22,6 +22,12 @@ else
 fi
 
 mkdir -p ${OUTDIR}
+#Check if there has been an error creating the directory
+if [ $? -eq 1 ]
+then
+	echo "The directory could not be created."
+	exit 1
+fi
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/linux-stable" ]; then
@@ -64,8 +70,26 @@ fi
 mkdir ./rootfs
 cd ./rootfs
 mkdir bin dev etc home lib lib64 proc sbin sys tmp usr var
+#Check if there has been an error creating the directory
+if [ $? -eq 1 ]
+then
+	echo "The directories could not be created."
+	exit 1
+fi
 mkdir usr/bin usr/lib usr/sbin
+#Check if there has been an error creating the directory
+if [ $? -eq 1 ]
+then
+	echo "The directories could not be created."
+	exit 1
+fi
 mkdir -p var/log
+#Check if there has been an error creating the directory
+if [ $? -eq 1 ]
+then
+	echo "The directories could not be created."
+	exit 1
+fi
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
@@ -76,8 +100,6 @@ git clone git://busybox.net/busybox.git
     #Configure busybox
     make distclean
     make defconfig
-    
-    
 else
     cd busybox
 fi
@@ -102,8 +124,8 @@ cp ${SYSROOT}/lib64/libc.so.6 lib64
 sudo mknod -m 666 dev/null c 1 3
 sudo mknod -m 666 dev/console c 5 1
 #Put the device nodes to the /lib directory
-cd ${OUTDIR}
-cd ./linux-stable
+#cd ${OUTDIR}
+#cd ./linux-stable
 #The following line is commented to have a smaller rootfs that fits into 256M
 #make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} INSTALL_MOD_PATH=${OUTDIR}/rootfs modules_install
 

@@ -52,17 +52,17 @@ bool do_system(const char *cmd)
 			//Return false
 			return false;
 		}
-		else if(ret_val == 127)
+		else if(ret_val > 0)
 		{
 			//Unknown to the system() caller if the call returned 127 or the invocation failed
-			syslog(LOG_ERR, "Could not successfully execute the command \"%s\"", cmd);
+			syslog(LOG_ERR, "The command \"%s\" returned value higher than 0: %d", cmd, ret_val);
 			//Return false, expecting that the process called does not return 127 on success
 			return false;
 		}
 		else
 		{
 			//Syslog the return value (default facility)
-			syslog(LOG_DEBUG, "The command %s ran successfully and it returned %d.", cmd, ret_val);
+			syslog(LOG_DEBUG, "The command \"%s\" ran successfully and it returned %d.", cmd, ret_val);
 			return true;
 		}
     }
@@ -75,13 +75,27 @@ bool do_system(const char *cmd)
 * @param command - A list of 1 or more arguments after the @param count argument.
 *   The first is always the full path to the command to execute with execv()
 *   The remaining arguments are a list of arguments to pass to the command in execv()
+* @param file - Pointer to a file to redirect stdout. "do_exec()" will pass NULL, 
+* and "do_exec_redirect" passes the filename. Both cases are handled in this same implementation.
 * @return true if the command @param ... with arguments @param arguments were executed successfully
 *   using the execv() call, false if an error occurred, either in invocation of the
 *   fork, waitpid, or execv() command, or if a non-zero return value was returned
 *   by the command issued in @param arguments with the specified arguments.
 */
-static bool call_exec(char **command)
+static bool call_exec(char **command, const char *file)
 {
+	//Open the file (must be closed by the parent for good child cases)
+	int fd;
+	if(file)
+	{
+		fd = open(file, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+		if(fd < 0)
+		{
+			syslog(LOG_ERR, "Could not create the file where stdout will be redirected: %s", strerror(errno));
+			return false;
+		}
+	}
+
 /*
  *   Execute a system command by calling fork, execv(),
  *   and wait instead of system (see LSP page 161).
@@ -98,6 +112,21 @@ static bool call_exec(char **command)
 	}
 	else if(fork_ret == 0)
 	{
+		//Check if file is not null to open a file and redirect stdout
+		if(file)
+		{
+			/*
+			*   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a reference,
+			*   redirect standard out to a file specified by outputfile.
+			*
+			*/
+			if(dup2(fd, STDOUT) < 0)
+			{
+				syslog(LOG_ERR, "Could not redirect stdout to the file: %s", strerror(errno));
+				close(fd);
+				return false;
+			}
+		}
 		//Child process, execute the other process
 		execv(command[0], command);
 		syslog(LOG_ERR, "execv failed: %s.", strerror(errno));
@@ -107,6 +136,8 @@ static bool call_exec(char **command)
 	//Wait for the child process to finalize
 	int status;
 	int wait_ret = waitpid(fork_ret, &status, 0);
+	if(file)
+		close(fd);
 	if(wait_ret == -1)
 	{
 		syslog(LOG_ERR, "waitpid() failed: %s.", strerror(errno));
@@ -168,7 +199,7 @@ bool do_exec(int count, ...)
     command[count] = NULL;
 	va_end(args);
     
-    return call_exec(command);
+    return call_exec(command, NULL);
 }
 
 /**
@@ -188,24 +219,6 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     }
     command[count] = NULL;
 	va_end(args);
-/*
- *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
- *   redirect standard out to a file specified by outputfile.
- *   The rest of the behaviour is same as do_exec()
- *
-*/
-	int fd = open(outputfile, O_WRONLY | O_TRUNC | O_CREAT, 0644);
-	if(fd < 0)
-	{
-		syslog(LOG_ERR, "Could not create the file where stdout will be redirected: %s", strerror(errno));
-		return false;
-	}
-	if(dup2(fd, STDOUT) < 0)
-	{
-		syslog(LOG_ERR, "Could not redirect stdout to the file: %s", strerror(errno));
-		close(fd);
-		return false;
-	}
 	
-	return call_exec(command);
+	return call_exec(command, outputfile);
 }
