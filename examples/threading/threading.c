@@ -5,9 +5,11 @@
 #include <time.h>
 #include <errno.h>
 #include <syslog.h>
+#include <string.h>
 
 //Defines
-#define NS_TO_MS    (1000000)
+#define NS_TO_MS    (1000000) //Multiply
+#define S_TO_MS     (1000) //Divide
 
 // Optional: use these functions to add debug or error prints to your application
 #define DEBUG_LOG(msg,...)
@@ -25,7 +27,7 @@ void* threadfunc(void* thread_param)
     struct thread_data *parameter = (struct thread_data *)thread_param;
 
     //Wait (implemented thanks to https://man7.org/linux/man-pages/man2/nanosleep.2.html)
-    struct timespec req = {0, (parameter->wait_acquire_ms)*NS_TO_MS};
+    struct timespec req = {(parameter->wait_acquire_ms)/S_TO_MS, ((parameter->wait_acquire_ms)%S_TO_MS)*NS_TO_MS};
     struct timespec rem;
     int ret = nanosleep(&req, &rem);
     //Check if an error occurred
@@ -54,8 +56,8 @@ void* threadfunc(void* thread_param)
     syslog(LOG_DEBUG, "The thread has obtained the mutex.");
 
     //Wait after locking
-    req.tv_sec = 0;
-    req.tv_nsec = (parameter->wait_locked_ms)*NS_TO_MS;
+    req.tv_sec = (parameter->wait_acquire_ms)/S_TO_MS;
+    req.tv_nsec = ((parameter->wait_acquire_ms)%S_TO_MS)*NS_TO_MS;
     ret = nanosleep(&req, &rem);
     //Check if an error occurred
     while(ret == -1)
@@ -78,7 +80,11 @@ void* threadfunc(void* thread_param)
     }
 
     //Release mutex as described by thread_data structure
-    pthread_mutex_unlock(parameter->mutex);
+    int lock_ret = pthread_mutex_unlock(parameter->mutex);
+    if(lock_ret)
+    {
+        syslog(LOG_ERR, "The lock could not be acquired: %s", strerror(errno));
+    }
     syslog(LOG_DEBUG, "The thread has released the mutex.");
 
     //Return success
