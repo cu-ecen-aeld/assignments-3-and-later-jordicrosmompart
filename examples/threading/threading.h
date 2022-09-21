@@ -8,12 +8,13 @@
  * the joiner thread.
  */
 struct thread_data{
-    /*
-     * TODO: add other values your thread will need to manage
-     * into this structure, use this structure to communicate
-     * between the start_thread_obtaining_mutex function and
-     * your thread implementation.
-     */
+    
+    //Requested wait before locking the mutex
+    int wait_acquire_ms;
+    //Pointer to the mutex to be used
+    pthread_mutex_t *mutex;
+    //Requested wait after locking the mutex
+    int wait_locked_ms;
 
     /**
      * Set to true if the thread completed with success, false
