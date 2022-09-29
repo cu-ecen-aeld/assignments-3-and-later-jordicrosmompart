@@ -147,79 +147,82 @@ void socketserver(int sck)
             }
             index += recv_ret;
 
-            //Check if the last value received is "\n"
-            if(recv_data[index - 1] == '\n')
+            if(index != 0)
             {
-                //Put the contents into /var/tmp/aesdsocketdata
-                //Write the string to the file
-                //Send all the contents read from /var/tmp/aesdsocketdata back to the client
-                if(lseek(file_fd, 0, SEEK_END) == -1)
+                //Check if the last value received is "\n"
+                if(recv_data[index - 1] == '\n')
                 {
-                    syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
-                    exit(1);  
-                }
-                int written_bytes;
-                int len_to_write = index;
-                char *ptr_to_write = recv_data;
-                while(len_to_write != 0)
-                {
-                    written_bytes = write(file_fd, ptr_to_write, len_to_write);
-                    if(written_bytes == -1)
+                    //Put the contents into /var/tmp/aesdsocketdata
+                    //Write the string to the file
+                    //Send all the contents read from /var/tmp/aesdsocketdata back to the client
+                    if(lseek(file_fd, 0, SEEK_END) == -1)
                     {
-                        //If the error is caused by an interruption of the system call try again
-                        if(errno == EINTR)
-                            continue;
-
-                        //Else, error occurred, print it to syslog and finish program
-                        syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
-                        exit(1);
+                        syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
+                        exit(1);  
                     }
-                    len_to_write -= written_bytes;
-                    ptr_to_write += written_bytes; 
-                }
-
-                file_size += index;
-
-                //Send all the contents read from /var/tmp/aesdsocketdata back to the client
-                if(lseek(file_fd, 0, SEEK_SET) == -1)
-                {
-                    syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
-                    exit(1);  
-                }
-                
-                char *buff_read = malloc(sizeof(char) * file_size);
-                char *buff_read_off = buff_read;
-                int bytes_to_read = file_size;
-                int read_bytes;
-                while(bytes_to_read != 0)
-                {
-                    read_bytes = read(file_fd, buff_read_off, bytes_to_read);
-                    if(read_bytes == -1)
+                    int written_bytes;
+                    int len_to_write = index;
+                    char *ptr_to_write = recv_data;
+                    while(len_to_write != 0)
                     {
-                        //If the error is caused by an interruption of the system call try again
-                        if(errno == EINTR)
-                            continue;
+                        written_bytes = write(file_fd, ptr_to_write, len_to_write);
+                        if(written_bytes == -1)
+                        {
+                            //If the error is caused by an interruption of the system call try again
+                            if(errno == EINTR)
+                                continue;
 
-                        //Else, error occurred, print it to syslog and finish program
-                        syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
-                        exit(1);
+                            //Else, error occurred, print it to syslog and finish program
+                            syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
+                            exit(1);
+                        }
+                        len_to_write -= written_bytes;
+                        ptr_to_write += written_bytes; 
                     }
-                    bytes_to_read -= read_bytes;
-                    buff_read_off += read_bytes; 
-                }
-                //Send the contents back to the client
-                send(connection_fd, buff_read, file_size, 0);
-                //Free the used bufferr
-                free(buff_read);
 
-                //Reset index to loop again
-                index = 0;
-            }
-            //Realloc the array if it got full without an '\n'
-            else if(index == (RECV_BUFF_LEN*chunks))
-            {
-                chunks++;
-                recv_data = realloc(recv_data, sizeof(char)*RECV_BUFF_LEN*chunks);
+                    file_size += index;
+
+                    //Send all the contents read from /var/tmp/aesdsocketdata back to the client
+                    if(lseek(file_fd, 0, SEEK_SET) == -1)
+                    {
+                        syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
+                        exit(1);  
+                    }
+                    
+                    char *buff_read = malloc(sizeof(char) * file_size);
+                    char *buff_read_off = buff_read;
+                    int bytes_to_read = file_size;
+                    int read_bytes;
+                    while(bytes_to_read != 0)
+                    {
+                        read_bytes = read(file_fd, buff_read_off, bytes_to_read);
+                        if(read_bytes == -1)
+                        {
+                            //If the error is caused by an interruption of the system call try again
+                            if(errno == EINTR)
+                                continue;
+
+                            //Else, error occurred, print it to syslog and finish program
+                            syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
+                            exit(1);
+                        }
+                        bytes_to_read -= read_bytes;
+                        buff_read_off += read_bytes; 
+                    }
+                    //Send the contents back to the client
+                    send(connection_fd, buff_read, file_size, 0);
+                    //Free the used bufferr
+                    free(buff_read);
+
+                    //Reset index to loop again
+                    index = 0;
+                }
+                //Realloc the array if it got full without an '\n'
+                else if(index == (RECV_BUFF_LEN*chunks))
+                {
+                    chunks++;
+                    recv_data = realloc(recv_data, sizeof(char)*RECV_BUFF_LEN*chunks);
+                }
             }
 
         } while(recv_ret != 0 && !graceful_exit);
