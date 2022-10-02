@@ -355,10 +355,10 @@ void socketserver(int sck)
 */
 int main(int c, char **argv)
 {
-
+    printf("First instruction\n");
     //Open the log to write to the default "/var/log/syslog" and set the LOG_USER facility
     openlog(NULL, 0, LOG_USER);
-
+    printf("Second instruction\n");
     //Set up the signals handler
     struct sigaction action;
     action.sa_handler = signalhandler;
@@ -369,18 +369,20 @@ int main(int c, char **argv)
         printf( "Could not set up empty signal set: %s.", strerror(errno));
         exit(1); 
     }
+    printf("3 instruction\n");
     action.sa_mask = empty;
     if(sigaction(SIGINT, &action, NULL) == -1)
     {
         printf( "Could not set up handle for SIGINT: %s.", strerror(errno));
         exit(1);
     }
+    printf("4 instruction\n");
     if(sigaction(SIGTERM, &action, NULL) == -1)
     {
         printf( "Could not set up handle for SIGTERM: %s.", strerror(errno));
         exit(1);
     }
-
+    printf("5 instruction\n");
     //Socket bind before a potential fork()
     //Build struct with the address related to the socket
     struct addrinfo hints;
