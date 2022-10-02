@@ -58,7 +58,7 @@ void signalhandler(int sig)
 {
     if(sig == SIGINT || sig == SIGTERM)
     {
-       syslog(LOG_INFO, "Caught signal, exiting");
+       printf( "Caught signal, exiting");
     
        graceful_exit = 1;
     }
@@ -80,14 +80,14 @@ void print_accepted_conn(struct sockaddr_storage client_addr)
         char addr[INET6_ADDRSTRLEN];
         struct sockaddr_in *addr_in = (struct sockaddr_in *)&client_addr;
         inet_ntop(AF_INET, &(addr_in->sin_addr), addr, INET_ADDRSTRLEN);
-        syslog(LOG_INFO, "Accepted connection from %s", addr);
+        printf( "Accepted connection from %s", addr);
     }
     else if(client_addr.ss_family == AF_INET6)
     {
         char addr[INET6_ADDRSTRLEN];
         struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&client_addr;
         inet_ntop(AF_INET6, &(addr_in6->sin6_addr), addr, INET6_ADDRSTRLEN);
-        syslog(LOG_INFO, "Accepted connection from %s", addr);
+        printf( "Accepted connection from %s", addr);
     }
 }
 
@@ -105,14 +105,14 @@ void print_closed_conn(struct sockaddr_storage client_addr)
         char addr[INET6_ADDRSTRLEN];
         struct sockaddr_in *addr_in = (struct sockaddr_in *)&client_addr;
         inet_ntop(AF_INET, &(addr_in->sin_addr), addr, INET_ADDRSTRLEN);
-        syslog(LOG_INFO, "Closed connection from %s", addr);
+        printf( "Closed connection from %s", addr);
     }
     else if(client_addr.ss_family == AF_INET6)
     {
         char addr[INET6_ADDRSTRLEN];
         struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&client_addr;
         inet_ntop(AF_INET6, &(addr_in6->sin6_addr), addr, INET6_ADDRSTRLEN);
-        syslog(LOG_INFO, "Closed connection from %s", addr);
+        printf( "Closed connection from %s", addr);
     }
 }
 
@@ -130,21 +130,21 @@ void exit_wrapper(int sck, int file_fd)
     if(close(sck) == -1)
     {
         //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not close socket: %s", strerror(errno));
+        printf( "Could not close socket: %s", strerror(errno));
         exit(1);
     }
     //Close the file used to log all the data received
     if(close(file_fd) == -1)
     {
         //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not close log file: %s", strerror(errno));
+        printf( "Could not close log file: %s", strerror(errno));
         exit(1);
     }
     //Delete the file
     if(remove(LOG_PATH) == -1)
     {
         //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not remove log file: %s", strerror(errno));
+        printf( "Could not remove log file: %s", strerror(errno));
         exit(1);
     }
 }
@@ -163,17 +163,17 @@ void socketserver(int sck)
     //Start listening to addr+port
     if(listen(sck, SERVER_QUEUE) == -1)
     {
-        syslog(LOG_ERR, "An error occurred listening the socket: %s", strerror(errno));
+        printf( "An error occurred listening the socket: %s", strerror(errno));
         exit(1);        
     }
 
-    syslog(LOG_INFO, "The server is listening to port 9000");
+    printf( "The server is listening to port 9000");
 
     //Create the file that will log the messages received
     int file_fd = open(LOG_PATH, O_CREAT | O_RDWR | O_TRUNC, 0666);
     if(file_fd == -1)
     {
-        syslog(LOG_ERR, "Could not create the log file: %s", strerror(errno));
+        printf( "Could not create the log file: %s", strerror(errno));
         exit(1);  
     }
 
@@ -197,7 +197,7 @@ void socketserver(int sck)
             }
             else
             {
-                syslog(LOG_ERR, "An error occurred accepting a new connection to the socket: %s", strerror(errno));
+                printf( "An error occurred accepting a new connection to the socket: %s", strerror(errno));
                 exit(1);
             }
         }
@@ -214,7 +214,7 @@ void socketserver(int sck)
         recv_data = malloc(sizeof(char)*RECV_BUFF_LEN*chunks);
         if(!recv_data)
         {
-            syslog(LOG_ERR, "Could not malloc: %s", strerror(errno));
+            printf( "Could not malloc: %s", strerror(errno));
             exit(1);  
         }
 
@@ -223,7 +223,7 @@ void socketserver(int sck)
             recv_ret = recv(connection_fd, &recv_data[index], RECV_BUFF_LEN, 0);
             if(recv_ret == -1)
             {
-                syslog(LOG_ERR, "An error occurred reading from the socket: %s", strerror(errno));
+                printf( "An error occurred reading from the socket: %s", strerror(errno));
                 exit(1);  
             }
             index += recv_ret;
@@ -238,7 +238,7 @@ void socketserver(int sck)
                     //Send all the contents read from /var/tmp/aesdsocketdata back to the client
                     if(lseek(file_fd, 0, SEEK_END) == -1)
                     {
-                        syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
+                        printf( "Could not get to the end of the file: %s", strerror(errno));
                         exit(1);  
                     }
 
@@ -255,7 +255,7 @@ void socketserver(int sck)
                                 continue;
 
                             //Else, error occurred, print it to syslog and finish program
-                            syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
+                            printf( "Could not write to the file: %s", strerror(errno));
                             exit(1);
                         }
                         len_to_write -= written_bytes;
@@ -267,7 +267,7 @@ void socketserver(int sck)
                     //Send all the contents read from /var/tmp/aesdsocketdata back to the client
                     if(lseek(file_fd, 0, SEEK_SET) == -1)
                     {
-                        syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
+                        printf( "Could not get to the beginning of the file: %s", strerror(errno));
                         exit(1);  
                     }
                     
@@ -288,7 +288,7 @@ void socketserver(int sck)
                                 continue;
 
                             //Else, error occurred, print it to syslog and finish program
-                            syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
+                            printf( "Could not read from the file: %s", strerror(errno));
                             exit(1);
                         }
 
@@ -298,7 +298,7 @@ void socketserver(int sck)
                         //Send the contents back to the client
                         int sent_bytes = -1;
                         int send_off = 0;
-                        syslog(LOG_INFO, "Send bytes: %d", send_bytes);
+                        printf( "Send bytes: %d", send_bytes);
                         while(sent_bytes != 0)
                         {
                             sent_bytes = send(connection_fd, &buff_read[send_off], send_bytes, 0);
@@ -309,7 +309,7 @@ void socketserver(int sck)
                                     continue;
 
                                 //Else, error occurred, print it to syslog and finish program
-                                syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
+                                printf( "Could not read from the file: %s", strerror(errno));
                                 exit(1);
                             }
                             send_bytes -= sent_bytes;
@@ -328,7 +328,7 @@ void socketserver(int sck)
                     recv_data = realloc(recv_data, sizeof(char)*RECV_BUFF_LEN*chunks);
                     if(!recv_data)
                     {
-                        syslog(LOG_ERR, "Could not realloc: %s", strerror(errno));
+                        printf( "Could not realloc: %s", strerror(errno));
                         exit(1);  
                     }
                 }
@@ -366,18 +366,18 @@ int main(int c, char **argv)
     sigset_t empty;
     if(sigemptyset(&empty) == -1)
     {
-        syslog(LOG_ERR, "Could not set up empty signal set: %s.", strerror(errno));
+        printf( "Could not set up empty signal set: %s.", strerror(errno));
         exit(1); 
     }
     action.sa_mask = empty;
     if(sigaction(SIGINT, &action, NULL) == -1)
     {
-        syslog(LOG_ERR, "Could not set up handle for SIGINT: %s.", strerror(errno));
+        printf( "Could not set up handle for SIGINT: %s.", strerror(errno));
         exit(1);
     }
     if(sigaction(SIGTERM, &action, NULL) == -1)
     {
-        syslog(LOG_ERR, "Could not set up handle for SIGTERM: %s.", strerror(errno));
+        printf( "Could not set up handle for SIGTERM: %s.", strerror(errno));
         exit(1);
     }
 
@@ -391,7 +391,7 @@ int main(int c, char **argv)
     hints.ai_socktype = SOCK_STREAM;
     if(getaddrinfo("localhost", "9000", &hints, &res) != 0)
     {
-        syslog(LOG_ERR, "An error occurred setting up the socket.");
+        printf( "An error occurred setting up the socket.");
         exit(1);
     }
 
@@ -399,13 +399,13 @@ int main(int c, char **argv)
     int sck = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if(sck == -1)
     {
-        syslog(LOG_ERR, "An error occurred setting up the socket: %s", strerror(errno));
+        printf( "An error occurred setting up the socket: %s", strerror(errno));
         exit(1);
     }
     //Bind the socket to the addr+port specified in "getaddrinfo"
     if(bind(sck, res->ai_addr, res->ai_addrlen) == -1)
     {
-        syslog(LOG_ERR, "An error occurred binding the socket: %s", strerror(errno));
+        printf( "An error occurred binding the socket: %s", strerror(errno));
         exit(1);        
     }
 
@@ -415,7 +415,7 @@ int main(int c, char **argv)
     //Check if -d has been provided
     if(c == 1)
     {
-        syslog(LOG_INFO, "Server running in no-daemon mode.");
+        printf( "Server running in no-daemon mode.");
         //Handle server
         socketserver(sck);
     }
@@ -424,17 +424,17 @@ int main(int c, char **argv)
         //The argument must be -d
         if(strcmp(argv[1], "-d") != 0)
         {
-            syslog(LOG_ERR, "Invalid number of arguments");
+            printf( "Invalid number of arguments");
             usage(argv[0]);
             exit(1);
         }
 
         //Start server as a daemon
-        syslog(LOG_INFO, "Server running in daemon mode.");
+        printf( "Server running in daemon mode.");
         int fork_ret = fork();
         if(fork_ret == -1)
         {
-            syslog(LOG_ERR, "Unable to perform fork that creates daemon: %s.", strerror(errno));
+            printf( "Unable to perform fork that creates daemon: %s.", strerror(errno));
             exit(1);
         }
         else if(fork_ret == 0)
@@ -443,13 +443,13 @@ int main(int c, char **argv)
             //Create new session and process group to prevent Terminal signals mixing with the Daemon
             if(setsid() == -1)
             {
-                syslog(LOG_ERR, "Unable to create a new session and process group: %s", strerror(errno));
+                printf( "Unable to create a new session and process group: %s", strerror(errno));
                 exit(1);
             }
             //Set the working directory to the root directory
             if(chdir("/") == -1)
             {
-                syslog(LOG_ERR, "Unable to change working directory: %s", strerror(errno));
+                printf( "Unable to change working directory: %s", strerror(errno));
                 exit(1);
             }
 
@@ -466,7 +466,7 @@ int main(int c, char **argv)
     }
     else
     {
-        syslog(LOG_ERR, "Invalid number of arguments");
+        printf( "Invalid number of arguments");
         usage(argv[0]);
         exit(1);
     }
