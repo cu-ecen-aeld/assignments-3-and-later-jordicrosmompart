@@ -396,7 +396,7 @@ int main(int c, char **argv)
         printf( "An error occurred setting up the socket.");
         exit(1);
     }
-
+printf("6 instruction\n");
     //Create the socket file descriptor
     int sck = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if(sck == -1)
@@ -404,16 +404,17 @@ int main(int c, char **argv)
         printf( "An error occurred setting up the socket: %s", strerror(errno));
         exit(1);
     }
+    printf("7 instruction\n");
     //Bind the socket to the addr+port specified in "getaddrinfo"
     if(bind(sck, res->ai_addr, res->ai_addrlen) == -1)
     {
         printf( "An error occurred binding the socket: %s", strerror(errno));
         exit(1);        
     }
-
+printf("8 instruction\n");
     //Free the addr linked list now that we have already used it
     freeaddrinfo(res);
-
+printf("9 instruction\n");
     //Check if -d has been provided
     if(c == 1)
     {
