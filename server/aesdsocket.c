@@ -160,15 +160,17 @@ void exit_wrapper(int sck, int file_fd)
 */
 void socketserver(int sck)
 {
+    printf("About to listen\n");
     //Start listening to addr+port
     if(listen(sck, SERVER_QUEUE) == -1)
     {
         printf( "An error occurred listening the socket: %s", strerror(errno));
         exit(1);        
     }
-
+printf("About to listen2\n");
     printf( "The server is listening to port 9000");
 
+printf("About to listen3\n");
     //Create the file that will log the messages received
     int file_fd = open(LOG_PATH, O_CREAT | O_RDWR | O_TRUNC, 0666);
     if(file_fd == -1)
@@ -176,11 +178,11 @@ void socketserver(int sck)
         printf( "Could not create the log file: %s", strerror(errno));
         exit(1);  
     }
-
+printf("About to listen4\n");
     //Start a loop of receiving contents
     int file_size = 0;
     char *recv_data = NULL;
-
+printf("About to listen5\n");
     while(!graceful_exit)
     {
         struct sockaddr_storage client_addr;
