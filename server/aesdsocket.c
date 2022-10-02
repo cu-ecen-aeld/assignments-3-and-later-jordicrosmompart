@@ -387,7 +387,7 @@ int main(int c, char **argv)
     //Needs to be freed after using
     struct addrinfo *res;
     memset(&hints, 0, sizeof(struct addrinfo));
-    hints.ai_family = AF_INET;
+    hints.ai_flags = AI_PASSIVE;
     hints.ai_socktype = SOCK_STREAM;
     if(getaddrinfo(NULL, "9000", &hints, &res) != 0)
     {
@@ -399,6 +399,12 @@ int main(int c, char **argv)
 
     int sck = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if(sck == -1)
+    {
+        syslog(LOG_ERR, "An error occurred setting up the socket: %s", strerror(errno));
+        exit(1);
+    }
+    int yes = 1;
+    if(setsockopt(sck,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof(yes)) == -1)
     {
         syslog(LOG_ERR, "An error occurred setting up the socket: %s", strerror(errno));
         exit(1);
