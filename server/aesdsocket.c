@@ -1,476 +1,541 @@
-/**
-* @file aesdsocket.c
-* @brief Creates a server on port 9000
-*
-* Sets up a server on port 9000 and accepts any connection.
-* The contents obtained are appended in /var/tmp/aesdsocketdata
-* Once the client ends the connection, the full content of the file is returned to it
-* Logs acceptance and closure of connections
-* Accepts new clients until SIGINT or SIGTERM signals are received
+/*
+*   file:      aesdsocket.c
+*   brief:     Implements socket functionality. Listens to port 9000 and stores any packet received in the file /var/aesdsocketdata and sends it back over the same port.
+*              Packets are assumed to be separated with the \n character.
+*              Can optionally be executed as daemon with '-d' command line argument.
+*   author:    Guruprashanth Krishnakumar, gukr5411@colorado.edu
+*   date:      10/01/2022
+*   refs:      https://beej.us/guide/bgnet/html/, lecture slides of ECEN 5713 - Advanced Embedded Software Dev.
 */
 
-//Includes
-#include <stdlib.h>
-#include <stdio.h>
-#include <syslog.h>
-#include <fcntl.h>
-#include <string.h>
-#include <errno.h>
-#include <unistd.h>
-#include <signal.h>
+/*
+*   HEADER FILES
+*/
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
-//Defines
-#define     SERVER_QUEUE    (10)
-#define     LOG_PATH        ("/var/tmp/aesdsocketdata")
-#define     RECV_BUFF_LEN   (1024)
-
-//Globals
-int graceful_exit = 0;
-
-/**
-* usage
-* @brief Prints the usage of the program.
-*
-* @param  char* command called
-* @return void
+/*
+*   MACROS
 */
-void usage(char *command)
-{
-    //Print the usage
-    printf("Command: %s <flag>\n", command);
-    printf("Functionality: Creates a server, <flag> must be set to \"-d\" if the caller wants to run it as a daemon.\n");
+#define BUF_SIZE_UNIT           (1024)
 
+/*
+*   GLOBALS
+*/
+typedef enum
+{
+    Accept_Connections,
+    Receive_From_Socket,
+    Parse_data,
+}states_t;
+
+typedef struct
+{
+    bool clean_addr_info;
+    bool clean_socket_descriptor;
+    bool clean_socket_fd;
+    bool clean_append_fd;
+    bool free_append_string;
+    bool run_as_daemon;
+    bool reading_data;
+    bool signal_caught;
+    int socket_descriptor;
+    int socket_file_descriptor;
+    int append_file_descriptor;
+    struct addrinfo *host_addr_info;
+    char *buf;
+    states_t curr_state;
+}socket_state_struct_t;
+
+socket_state_struct_t socket_state;
+
+/*
+*   STATIC FUNCTION PROTOTYPES
+*/
+
+/*
+*   Checks the state of booleans in the socket_state structure and performs neccesarry cleanups like 
+*   closing fds, freeing memory etc.,
+*
+*   Args:
+*       None
+*   Params:
+*       None
+*/
+static void perform_cleanup();
+
+/*
+*   Signal handler for SIGINT and SIGTERM. If any open connection is on-going on the socket,
+*   it sets a flag that a signal was caught. Otherwise, performs neccessarry cleanup and exits.
+*
+*   Args:
+*       None
+*   Params:
+*       None
+*/
+static void sighandler();
+
+/*
+*   Returns the IP address present in the socket address data structure passed.
+*
+*   Args:
+*       sockaddr    -   socket address data structure
+*   Params:
+*       IPv4 or IPv6 address contained in the socket address data structure
+*/
+static void *get_in_addr(struct sockaddr *sa);
+
+/*
+*   Dumps the content passed to a file.
+*
+*   Args:
+*       fd    -   handle to the file to write into
+*       string  -   Data to write to file
+*       write_len   -   Number of bytes contained in string.
+*   Params:
+*       Success or failure
+*/
+static int dump_content(int fd, char* string,int write_len);
+
+/*
+*   Reads from a file and echoes it back across the socket.
+*
+*   Args:
+*       fd    -   handle to the file to read
+*       read_len   -   Number of bytes contained in file.
+*   Params:
+*       Success or failure
+*/
+static int echo_file_socket(int fd,int read_len);
+
+/*
+*   Initializes the socket state structure to a known initial state.
+*
+*   Args:
+*       None
+*   Params:
+*       None
+*/
+static void initialize_socket_state();
+
+
+/*
+*   FUNCTION DEFINITIONS
+*/
+static void initialize_socket_state()
+{
+
+    socket_state.clean_addr_info = true;
+    socket_state.clean_socket_descriptor = false;
+    socket_state.clean_socket_fd = false;
+    socket_state.clean_append_fd = false;
+    socket_state.free_append_string = false;
+    socket_state.run_as_daemon = false;
+    socket_state.reading_data = false;
+    socket_state.signal_caught = false;
+    socket_state.host_addr_info = NULL;
+    socket_state.buf = NULL;
+}
+static void perform_cleanup()
+{
+    if(socket_state.host_addr_info && socket_state.clean_addr_info)
+    {
+        freeaddrinfo(socket_state.host_addr_info);
+    }
+    if(socket_state.clean_socket_descriptor)
+    {
+        close(socket_state.socket_descriptor);
+    }
+    if(socket_state.clean_socket_fd)
+    {
+        close(socket_state.socket_file_descriptor);
+    }
+    if(socket_state.clean_append_fd)
+    {
+        close(socket_state.append_file_descriptor);
+    }
+    if(socket_state.free_append_string)
+    {
+        free(socket_state.buf);
+    }
+}
+static void shutdown_function()
+{
+    printf("\nCaught Signal. Exiting\n");
+    perform_cleanup();
+    if(socket_state.clean_append_fd)
+    {
+        printf("Deleting file\n");
+        unlink("/var/tmp/aesdsocketdata");
+    }
     exit(1);
 }
 
-/**
-* sighandler
-* @brief Handles the SIGINT and SIGTERM signals.
-*
-* @param  int signal that triggered this function
-* @return void
-*/
-void signalhandler(int sig)
+static void sighandler()
 {
-    if(sig == SIGINT || sig == SIGTERM)
-    {
-       syslog(LOG_INFO, "Caught signal, exiting");
     
-       graceful_exit = 1;
-    }
-}
-
-/**
-* print_accepted_conn
-* @brief Prints the IP address used by the client socket
-*
-* @param  sockaddr_storage contains client information
-* @return void
-*/
-void print_accepted_conn(struct sockaddr_storage client_addr)
-{
-    //Get information from the client
-    //Credits: https://stackoverflow.com/questions/1276294/getting-ipv4-address-from-a-sockaddr-structure
-    if(client_addr.ss_family == AF_INET)
+    if(!socket_state.reading_data)
     {
-        char addr[INET6_ADDRSTRLEN];
-        struct sockaddr_in *addr_in = (struct sockaddr_in *)&client_addr;
-        inet_ntop(AF_INET, &(addr_in->sin_addr), addr, INET_ADDRSTRLEN);
-        syslog(LOG_INFO, "Accepted connection from %s", addr);
-    }
-    else if(client_addr.ss_family == AF_INET6)
-    {
-        char addr[INET6_ADDRSTRLEN];
-        struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&client_addr;
-        inet_ntop(AF_INET6, &(addr_in6->sin6_addr), addr, INET6_ADDRSTRLEN);
-        syslog(LOG_INFO, "Accepted connection from %s", addr);
-    }
-}
-
-/**
-* print_closed_conn
-* @brief Prints the IP address used by the client socket
-*
-* @param  sockaddr_storage contains client information
-* @return void
-*/
-void print_closed_conn(struct sockaddr_storage client_addr)
-{
-    if(client_addr.ss_family == AF_INET)
-    {
-        char addr[INET6_ADDRSTRLEN];
-        struct sockaddr_in *addr_in = (struct sockaddr_in *)&client_addr;
-        inet_ntop(AF_INET, &(addr_in->sin_addr), addr, INET_ADDRSTRLEN);
-        syslog(LOG_INFO, "Closed connection from %s", addr);
-    }
-    else if(client_addr.ss_family == AF_INET6)
-    {
-        char addr[INET6_ADDRSTRLEN];
-        struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&client_addr;
-        inet_ntop(AF_INET6, &(addr_in6->sin6_addr), addr, INET6_ADDRSTRLEN);
-        syslog(LOG_INFO, "Closed connection from %s", addr);
-    }
-}
-
-/**
-* exit_wrapper
-* @brief Closes socket and used files before exiting
-* 
-* @param int    socket fd
-* @param int    log fd+
-* @return void
-*/
-void exit_wrapper(int sck, int file_fd)
-{
-    //After stopping to accept requests, the socket can be closed
-    if(close(sck) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not close socket: %s", strerror(errno));
-        exit(1);
-    }
-    //Close the file used to log all the data received
-    if(close(file_fd) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not close log file: %s", strerror(errno));
-        exit(1);
-    }
-    //Delete the file
-    if(remove(LOG_PATH) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not remove log file: %s", strerror(errno));
-        exit(1);
-    }
-}
-
-/**
-* socketserver
-* @brief Creates a server listening to port 9000
-* 
-* The server functionality is described in more detail at
-* the file header.
-*
-* @return void
-*/
-void socketserver(int sck)
-{
-    //Start listening to addr+port
-    if(listen(sck, SERVER_QUEUE) == -1)
-    {
-        syslog(LOG_ERR, "An error occurred listening the socket: %s", strerror(errno));
-        exit(1);        
-    }
-
-    syslog(LOG_INFO, "The server is listening to port 9000");
-
-    //Create the file that will log the messages received
-    int file_fd = open(LOG_PATH, O_CREAT | O_RDWR | O_TRUNC, 0666);
-    if(file_fd == -1)
-    {
-        syslog(LOG_ERR, "Could not create the log file: %s", strerror(errno));
-        exit(1);  
-    }
-
-    //Start a loop of receiving contents
-    int file_size = 0;
-    char *recv_data = NULL;
-
-    while(!graceful_exit)
-    {
-        struct sockaddr_storage client_addr;
-        socklen_t addr_size = sizeof client_addr;
-
-        //Accept a connection
-        int connection_fd = accept(sck, (struct sockaddr *) &client_addr, &addr_size);
-        if(connection_fd == -1)
-        {
-            if(errno == EINTR)
-            {
-                //The signal has set "graceful_exit" and the next while iteration will not happen
-                break;
-            }
-            else
-            {
-                syslog(LOG_ERR, "An error occurred accepting a new connection to the socket: %s", strerror(errno));
-                exit(1);
-            }
-        }
-
-        print_accepted_conn(client_addr);
-
-        //Wait for data
-        int recv_ret;
-        int index = 0;
-        //Keep track of how many RECV_BUFF_LEN chunks "recv_data" has
-        int chunks = 1;
-        
-        //Start with a size, potentially increasing it if an entire packet cannot fit into it
-        recv_data = malloc(sizeof(char)*RECV_BUFF_LEN*chunks);
-        if(!recv_data)
-        {
-            syslog(LOG_ERR, "Could not malloc: %s", strerror(errno));
-            exit(1);  
-        }
-
-        do
-        {
-            recv_ret = recv(connection_fd, &recv_data[index], RECV_BUFF_LEN, 0);
-            if(recv_ret == -1)
-            {
-                syslog(LOG_ERR, "An error occurred reading from the socket: %s", strerror(errno));
-                exit(1);  
-            }
-            index += recv_ret;
-
-            if(index != 0)
-            {
-                //Check if the last value received is "\n"
-                if(recv_data[index - 1] == '\n')
-                {
-                    //Put the contents into /var/tmp/aesdsocketdata
-                    //Write the string to the file
-                    //Send all the contents read from /var/tmp/aesdsocketdata back to the client
-                    if(lseek(file_fd, 0, SEEK_END) == -1)
-                    {
-                        syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
-                        exit(1);  
-                    }
-
-                    int written_bytes;
-                    int len_to_write = index;
-                    char *ptr_to_write = recv_data;
-                    while(len_to_write != 0)
-                    {
-                        written_bytes = write(file_fd, ptr_to_write, len_to_write);
-                        if(written_bytes == -1)
-                        {
-                            //If the error is caused by an interruption of the system call try again
-                            if(errno == EINTR)
-                                continue;
-
-                            //Else, error occurred, print it to syslog and finish program
-                            syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
-                            exit(1);
-                        }
-                        len_to_write -= written_bytes;
-                        ptr_to_write += written_bytes; 
-                    }
-
-                    file_size += index;
-
-                    //Send all the contents read from /var/tmp/aesdsocketdata back to the client
-                    if(lseek(file_fd, 0, SEEK_SET) == -1)
-                    {
-                        syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
-                        exit(1);  
-                    }
-                    
-                    //Perform reads to send the file contents to the socket client
-                    int to_be_sent = file_size;
-                    char buff_read[RECV_BUFF_LEN];
-                    while(to_be_sent)
-                    {
-                        int send_bytes = 0;
-                        int read_bytes = read(file_fd, buff_read, RECV_BUFF_LEN);
-                        if(read_bytes != 0)
-                            send_bytes = read_bytes;
-
-                        if(read_bytes == -1)
-                        {
-                            //If the error is caused by an interruption of the system call try again
-                            if(errno == EINTR)
-                                continue;
-
-                            //Else, error occurred, print it to syslog and finish program
-                            syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
-                            exit(1);
-                        }
-
-                        //Less bytes remaining
-                        to_be_sent -= read_bytes;
-                        
-                        //Send the contents back to the client
-                        int sent_bytes = -1;
-                        int send_off = 0;
-                        syslog(LOG_INFO, "Send bytes: %d", send_bytes);
-                        while(sent_bytes != 0)
-                        {
-                            sent_bytes = send(connection_fd, &buff_read[send_off], send_bytes, 0);
-                            if(sent_bytes == -1)
-                            {
-                                //If the error is caused by an interruption of the system call try again
-                                if(errno == EINTR)
-                                    continue;
-
-                                //Else, error occurred, print it to syslog and finish program
-                                syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
-                                exit(1);
-                            }
-                            send_bytes -= sent_bytes;
-                            send_off += sent_bytes;
-                        }
-                        
-                    }
-
-                    //Reset index to use the malloc'ed buffer from the beginning
-                    index = 0;
-                }
-                //Realloc the array if it got full without an '\n'
-                else if(index == (RECV_BUFF_LEN*chunks))
-                {
-                    chunks++;
-                    recv_data = realloc(recv_data, sizeof(char)*RECV_BUFF_LEN*chunks);
-                    if(!recv_data)
-                    {
-                        syslog(LOG_ERR, "Could not realloc: %s", strerror(errno));
-                        exit(1);  
-                    }
-                }
-            }
-
-        } while(recv_ret != 0 && !graceful_exit);
-
-        //Free the used buffer
-        free(recv_data);
-        print_closed_conn(client_addr);
-    }
-
-    exit_wrapper(sck, file_fd);
-    return;
-}
-
-/**
-* main
-* @brief Follows the steps described in the file header.
-* 
-* @param int	number of command arguments
-* @param char**	array of arguments; argv[1] is <filename>, and argv[2] is <string>
-* @return 0
-*/
-int main(int c, char **argv)
-{
-
-    //Open the log to write to the default "/var/log/syslog" and set the LOG_USER facility
-    openlog(NULL, 0, LOG_USER);
-
-    //Set up the signals handler
-    struct sigaction action;
-    action.sa_handler = signalhandler;
-    action.sa_flags = 0;
-    sigset_t empty;
-    if(sigemptyset(&empty) == -1)
-    {
-        syslog(LOG_ERR, "Could not set up empty signal set: %s.", strerror(errno));
-        exit(1); 
-    }
-    action.sa_mask = empty;
-    if(sigaction(SIGINT, &action, NULL) == -1)
-    {
-        syslog(LOG_ERR, "Could not set up handle for SIGINT: %s.", strerror(errno));
-        exit(1);
-    }
-    if(sigaction(SIGTERM, &action, NULL) == -1)
-    {
-        syslog(LOG_ERR, "Could not set up handle for SIGTERM: %s.", strerror(errno));
-        exit(1);
-    }
-
-    //Socket bind before a potential fork()
-    //Build struct with the address related to the socket
-    struct addrinfo hints;
-    //Needs to be freed after using
-    struct addrinfo *res;
-    memset(&hints, 0, sizeof(struct addrinfo));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    if(getaddrinfo("localhost", "9000", &hints, &res) != 0)
-    {
-        syslog(LOG_ERR, "An error occurred setting up the socket.");
-        exit(1);
-    }
-
-    //Create the socket file descriptor
-    int sck = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if(sck == -1)
-    {
-        syslog(LOG_ERR, "An error occurred setting up the socket: %s", strerror(errno));
-        exit(1);
-    }
-    //Bind the socket to the addr+port specified in "getaddrinfo"
-    if(bind(sck, res->ai_addr, res->ai_addrlen) == -1)
-    {
-        syslog(LOG_ERR, "An error occurred binding the socket: %s", strerror(errno));
-        exit(1);        
-    }
-
-    //Free the addr linked list now that we have already used it
-    freeaddrinfo(res);
-
-    //Check if -d has been provided
-    if(c == 1)
-    {
-        syslog(LOG_INFO, "Server running in no-daemon mode.");
-        //Handle server
-        socketserver(sck);
-    }
-    else if(c == 1 + 1)
-    {
-        //The argument must be -d
-        if(strcmp(argv[1], "-d") != 0)
-        {
-            syslog(LOG_ERR, "Invalid number of arguments");
-            usage(argv[0]);
-            exit(1);
-        }
-
-        //Start server as a daemon
-        syslog(LOG_INFO, "Server running in daemon mode.");
-        int fork_ret = fork();
-        if(fork_ret == -1)
-        {
-            syslog(LOG_ERR, "Unable to perform fork that creates daemon: %s.", strerror(errno));
-            exit(1);
-        }
-        else if(fork_ret == 0)
-        {
-            //Child process
-            //Create new session and process group to prevent Terminal signals mixing with the Daemon
-            if(setsid() == -1)
-            {
-                syslog(LOG_ERR, "Unable to create a new session and process group: %s", strerror(errno));
-                exit(1);
-            }
-            //Set the working directory to the root directory
-            if(chdir("/") == -1)
-            {
-                syslog(LOG_ERR, "Unable to change working directory: %s", strerror(errno));
-                exit(1);
-            }
-
-            //stdin, stdout and stderr could be redirected but I will not do it 
-            //to align to the demonstration from Coursera, where killing the daemon outputs in stdout.
-
-            //Handle server
-            socketserver(sck);
-            
-            exit(0);
-        }
-        //Exit the parent process to actually make the child process be a daemon
-        exit(0);
+        shutdown_function();
     }
     else
     {
-        syslog(LOG_ERR, "Invalid number of arguments");
-        usage(argv[0]);
-        exit(1);
+        socket_state.signal_caught = true;
+    }
+
+}
+static void *get_in_addr(struct sockaddr *sa)
+{
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in*)sa)->sin_addr);
+    }
+
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+static int dump_content(int fd, char* string,int write_len)
+{
+    ssize_t ret; 
+    while(write_len!=0)
+    {
+        ret = write(fd,string,write_len);
+        if(ret == 0)
+        {
+            break;
+        } 
+        if(ret == -1)
+        {
+            if(errno == EINTR)
+            {
+                continue;
+            }
+            //printf("Write len %d\n",write_len);
+            perror("Error Write");
+            return -1;
+        }
+        write_len -= ret;
+        string += ret;
+    }
+    return 0;
+}
+static int echo_file_socket(int fd,int read_len)
+{
+    ssize_t ret; 
+    char write_str[BUF_SIZE_UNIT];
+    while(read_len!=0)
+    {
+        memset(write_str,0,sizeof(write_str));
+        ret = read(fd,write_str,sizeof(write_str));
+        if(ret == 0)
+        {
+            break;
+        } 
+        if(ret == -1)
+        {
+            if(errno == EINTR)
+            {
+                continue;
+            }
+            //printf("Read Len %d\n",read_len);
+            perror("Read");
+            return -1;
+        }
+        int num_bytes_to_send = ret;
+        int num_bytes_sent = 0;
+        int str_index = 0;
+        while(num_bytes_to_send>0)
+        {
+            num_bytes_sent = send(socket_state.socket_file_descriptor,&write_str[str_index],num_bytes_to_send,0);
+            if(num_bytes_sent == -1)
+            {
+                perror("Send");
+                return -1;
+            }
+            num_bytes_to_send -= num_bytes_sent;
+            str_index += num_bytes_sent;
+        }
+        read_len -= ret;
+    }
+    return 0;
+}
+
+int main(int argc,char **argv)
+{
+    initialize_socket_state();
+    int opt;
+    while((opt = getopt(argc, argv,"d")) != -1)
+    {
+        switch(opt)
+        {
+            case 'd':
+                socket_state.run_as_daemon = true;
+                break;
+        }
+
+    }
+    int status=0,yes=1,buf_len=0,buf_cap=0;
+    struct addrinfo hints;
+    struct addrinfo *p = NULL;  // will point to the results
+    char s[INET6_ADDRSTRLEN],prev_ip[INET6_ADDRSTRLEN];
+    memset(s,0,sizeof(s));
+    memset(prev_ip,0,sizeof(s));
+    struct sockaddr_storage client_addr;
+    socklen_t addr_size = sizeof(client_addr);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_socktype = SOCK_STREAM; // TCP stream sockets
+    hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
+    //TODO: Call freeaddrinfo() once done with servinfo
+
+    /*
+    *   Setup signal handler
+    */
+    signal(SIGINT, sighandler);
+    signal(SIGTERM, sighandler);
+
+    /*
+    *   Get info regarding the peer at Port 9000
+    */
+    status = getaddrinfo(NULL, "9000", &hints, &socket_state.host_addr_info);
+    if(status != 0)
+    {
+        perror("GetAddrInfo");
+        perform_cleanup();
+        return -1;
+    }
+
+    /*
+    *   Try to bind to one of the socket descriptors returned by getaddrinfo
+    */
+    for(p = socket_state.host_addr_info; p != NULL; p = p->ai_next) 
+    {
+        socket_state.socket_descriptor = socket(p->ai_family, p->ai_socktype,p->ai_protocol);
+        if(socket_state.socket_descriptor == -1)
+        {
+            perror("Socket");
+            continue;
+        }
+        socket_state.clean_socket_descriptor = true;
+        status = setsockopt(socket_state.socket_descriptor,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof(yes));
+        if(status == -1)
+        {
+            perror("Failed to set socket options");
+            perform_cleanup();
+            return -1;
+        }
+        status = bind(socket_state.socket_descriptor,p->ai_addr, p->ai_addrlen);
+        if(status == -1)
+        {
+            close(socket_state.socket_descriptor);
+            perror("server: bind");
+            continue;
+        }
+        break;
+    }
+    if(p == NULL)
+    {
+        fprintf(stderr, "server: failed to bind\n");
+        perform_cleanup();
+        return -1;
     }
     
+    freeaddrinfo(socket_state.host_addr_info);
+    socket_state.clean_addr_info = false;
+    /*
+    *   if opt command line was specified, then run this program as a daemon
+    */
+    if(socket_state.run_as_daemon)
+    {
+        pid_t pid;
+        /* create new process */
+        pid = fork ();
+        if (pid == -1)
+        {
+            perror("Fork");
+            perform_cleanup();
+            return -1;
+        }
+        else if (pid != 0)
+        {
+            perform_cleanup();
+            exit (EXIT_SUCCESS);
+        }
+        else
+        {
+            if(setsid()==-1)
+            {
+                perror("Session");
+                perform_cleanup();
+                return -1;
+            }
+            if(chdir("/")==-1)
+            {
+                perror("Changing directory");
+                perform_cleanup();
+                return -1;
+            }
+            /* redirect fd's 0,1,2 to /dev/null */
+            close(STDIN_FILENO);
+            close(STDOUT_FILENO);
+            close(STDERR_FILENO);
+            open ("/dev/null", O_RDWR); /* stdin */
+            dup (0); /* stdout */
+            dup (0); /* stderror */
+        }
+    }
+    int backlog = 10;
+    printf("Listening for connections...\n");
+    status = listen(socket_state.socket_descriptor,backlog);
+    if(status == -1)
+    {
+        perror("Listen");
+        perform_cleanup();
+        return -1;
+    }
+    
+    int total_bytes_written_to_file=0;
+    socket_state.curr_state = Accept_Connections;
+    int num_bytes_read = 0;
+    int start_ptr = 0;
+    int num_bytes_to_read;
+    char *ptr;
+    /*
+    *   Simple statemachine implemented to handle socket reading loop.
+    *
+    *   Accept_Connections -  accept new connections. Open socket file descriptor. If same IP as before, open /var/aesdsocketdata in append mode, else in truncate mode.
+    *   Receive_From_Socket - Read data from socket. If no data received, close connection. Else send it for parsing.
+    *   Parse_Data  -   Parse the data received character by character to check for '\n', if newline found, dump data until that character and echo back across socket. 
+    */
+    while(1)
+    {
+        
+        switch(socket_state.curr_state)
+        {
+            case Accept_Connections:
+                socket_state.socket_file_descriptor = accept(socket_state.socket_descriptor,(struct sockaddr*)&client_addr,&addr_size);
+                if(socket_state.socket_file_descriptor == -1)
+                {
+                    perror("Error Accepting Connection");
+                    perform_cleanup();
+                    return -1;
+                }                    
+                socket_state.clean_socket_fd = true;
+                inet_ntop(client_addr.ss_family, get_in_addr((struct sockaddr *)&client_addr), s, sizeof(s));
+                //printf("Accepted connection from %s\n", s);
+                //socket_state.append_file_descriptor = open("/var/tmp/aesdsocketdata",O_RDWR|O_CREAT|O_APPEND,S_IRWXU|S_IRWXG|S_IRWXO);
+                if(strcmp(prev_ip,s)==0)
+                {
+                    //printf("Matching IP. Opening in Append mode\n");
+                    socket_state.append_file_descriptor = open("/var/tmp/aesdsocketdata",O_RDWR|O_CREAT|O_APPEND,S_IRWXU|S_IRWXG|S_IRWXO);
+                }
+                else
+                {
+                    printf("New IP. Opening in Trunc mode\n");
+                    socket_state.append_file_descriptor = open("/var/tmp/aesdsocketdata",O_RDWR|O_CREAT|O_TRUNC,S_IRWXU|S_IRWXG|S_IRWXO);   
+                }
+                strcpy(prev_ip,s);
+                socket_state.clean_append_fd = true;
+                socket_state.reading_data = true;
+                socket_state.curr_state = Receive_From_Socket;
+                break;
+            case Receive_From_Socket:
+                if(buf_cap == buf_len)
+                {
+                    if(buf_cap == 0)
+                    {
+                        socket_state.buf = malloc(BUF_SIZE_UNIT);
+                        socket_state.free_append_string = true;
+                    }
+                    else
+                    {
+                        int new_len = buf_cap + BUF_SIZE_UNIT;    
+                        socket_state.buf = realloc(socket_state.buf,new_len);                
+                    }
+                    if(!socket_state.buf)
+                    {
+                        printf("Insufficient memory. Exiting\n");
+                        perform_cleanup();
+                        return -1;
+                    }
+                    buf_cap += BUF_SIZE_UNIT;
+                }
+                num_bytes_read = 0;
+                num_bytes_read = recv(socket_state.socket_file_descriptor,(socket_state.buf+buf_len),(buf_cap - buf_len),0);
+                if(num_bytes_read == -1)
+                {
+                    perror("Recv");
+                    perform_cleanup();
+                    return -1;
+                }
+                else if(num_bytes_read>0)
+                {
+                    socket_state.curr_state = Parse_data;
+                }
+                else if(num_bytes_read == 0)
+                {
+                    //TODO, perform cleanup
+                    close(socket_state.socket_file_descriptor);
+                    socket_state.clean_socket_fd = false;
+                    buf_cap =0;
+                    buf_len = 0;
+                    start_ptr = 0;
+                    free(socket_state.buf);
+                    socket_state.free_append_string = false;
+                    socket_state.reading_data = false;
+                    if(socket_state.signal_caught)
+                    {
+                        shutdown_function();
+                    }
+                    //printf("Closed connection from %s\n", s);
+                    socket_state.curr_state = Accept_Connections;
+                }
+                break;
+            case Parse_data:
+                num_bytes_to_read = ((buf_len - start_ptr) + num_bytes_read);
+                //printf("Bytes read %d num_bytes_to_read %d\n",num_bytes_read,num_bytes_to_read);
+                int temp_read_var = num_bytes_to_read;
+                for(ptr = &socket_state.buf[start_ptr];temp_read_var>0;ptr++,temp_read_var--)
+                {
+                    if(*ptr == '\n')
+                    {
+                        temp_read_var--;
+                        //printf("Temp var read %d\n",temp_read_var);
+                        int bytes_written_until_newline = (num_bytes_to_read - temp_read_var);
+                        //printf("Total buffsize %d buf len %d bytes written until newline %d \n",buf_cap,buf_len,bytes_written_until_newline);
+                        if(dump_content(socket_state.append_file_descriptor,&socket_state.buf[start_ptr],bytes_written_until_newline)==-1)
+                        {
+                            perform_cleanup();
+                            return -1;
+                        }                        
+                        lseek(socket_state.append_file_descriptor, 0, SEEK_SET );
+                        total_bytes_written_to_file += bytes_written_until_newline;
+                        //printf("Total Bytes written to file %d\n",total_bytes_written_to_file);
 
-    return 0;
+                        if(echo_file_socket(socket_state.append_file_descriptor,total_bytes_written_to_file)==-1)
+                        {
+                            perform_cleanup();
+                            return -1;
+                        }
+                        start_ptr = bytes_written_until_newline;
+                        break;
+                    }
+                }
+                buf_len += num_bytes_read;
+                socket_state.curr_state = Receive_From_Socket;
+                break;
+        }    
+    }
 }
