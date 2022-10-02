@@ -403,12 +403,6 @@ int main(int c, char **argv)
         syslog(LOG_ERR, "An error occurred setting up the socket: %s", strerror(errno));
         exit(1);
     }
-    int yes = 1;
-    if(setsockopt(sck,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof(yes)) == -1)
-    {
-        syslog(LOG_ERR, "An error occurred setting up the socket: %s", strerror(errno));
-        exit(1);
-    }
     //Bind the socket to the addr+port specified in "getaddrinfo"
     if(bind(sck, res->ai_addr, res->ai_addrlen) == -1)
     {
