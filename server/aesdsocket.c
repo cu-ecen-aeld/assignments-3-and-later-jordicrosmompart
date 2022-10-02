@@ -387,7 +387,7 @@ int main(int c, char **argv)
     //Needs to be freed after using
     struct addrinfo *res;
     memset(&hints, 0, sizeof(struct addrinfo));
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     if(getaddrinfo("localhost", "9000", &hints, &res) != 0)
     {
