@@ -389,13 +389,14 @@ int main(int c, char **argv)
     memset(&hints, 0, sizeof(struct addrinfo));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    if(getaddrinfo("localhost", "9000", &hints, &res) != 0)
+    if(getaddrinfo(NULL, "9000", &hints, &res) != 0)
     {
         syslog(LOG_ERR, "An error occurred setting up the socket.");
         exit(1);
     }
 
     //Create the socket file descriptor
+
     int sck = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if(sck == -1)
     {
