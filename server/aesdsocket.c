@@ -65,6 +65,91 @@ void signalhandler(int sig)
 }
 
 /**
+* print_accepted_conn
+* @brief Prints the IP address used by the client socket
+*
+* @param  sockaddr_storage contains client information
+* @return void
+*/
+void print_accepted_conn(struct sockaddr_storage client_addr)
+{
+    //Get information from the client
+    //Credits: https://stackoverflow.com/questions/1276294/getting-ipv4-address-from-a-sockaddr-structure
+    if(client_addr.ss_family == AF_INET)
+    {
+        char addr[INET6_ADDRSTRLEN];
+        struct sockaddr_in *addr_in = (struct sockaddr_in *)&client_addr;
+        inet_ntop(AF_INET, &(addr_in->sin_addr), addr, INET_ADDRSTRLEN);
+        syslog(LOG_INFO, "Accepted connection from %s", addr);
+    }
+    else if(client_addr.ss_family == AF_INET6)
+    {
+        char addr[INET6_ADDRSTRLEN];
+        struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&client_addr;
+        inet_ntop(AF_INET6, &(addr_in6->sin6_addr), addr, INET6_ADDRSTRLEN);
+        syslog(LOG_INFO, "Accepted connection from %s", addr);
+    }
+}
+
+/**
+* print_closed_conn
+* @brief Prints the IP address used by the client socket
+*
+* @param  sockaddr_storage contains client information
+* @return void
+*/
+void print_closed_conn(struct sockaddr_storage client_addr)
+{
+    if(client_addr.ss_family == AF_INET)
+    {
+        char addr[INET6_ADDRSTRLEN];
+        struct sockaddr_in *addr_in = (struct sockaddr_in *)&client_addr;
+        inet_ntop(AF_INET, &(addr_in->sin_addr), addr, INET_ADDRSTRLEN);
+        syslog(LOG_INFO, "Closed connection from %s", addr);
+    }
+    else if(client_addr.ss_family == AF_INET6)
+    {
+        char addr[INET6_ADDRSTRLEN];
+        struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&client_addr;
+        inet_ntop(AF_INET6, &(addr_in6->sin6_addr), addr, INET6_ADDRSTRLEN);
+        syslog(LOG_INFO, "Closed connection from %s", addr);
+    }
+}
+
+/**
+* exit_wrapper
+* @brief Closes socket and used files before exiting
+* 
+* @param int    socket fd
+* @param int    log fd+
+* @return void
+*/
+void exit_wrapper(int sck, int file_fd)
+{
+    //After stopping to accept requests, the socket can be closed
+    if(close(sck) == -1)
+    {
+        //Else, error occurred, print it to syslog and finish program
+        syslog(LOG_ERR, "Could not close socket: %s", strerror(errno));
+        exit(1);
+    }
+    //Close the file used to log all the data received
+    if(close(file_fd) == -1)
+    {
+        //Else, error occurred, print it to syslog and finish program
+        syslog(LOG_ERR, "Could not close log file: %s", strerror(errno));
+        exit(1);
+    }
+    //Delete the file
+    if(remove(LOG_PATH) == -1)
+    {
+        //Else, error occurred, print it to syslog and finish program
+        syslog(LOG_ERR, "Could not remove log file: %s", strerror(errno));
+        exit(1);
+    }
+}
+
+/**
 * socketserver
 * @brief Creates a server listening to port 9000
 * 
@@ -94,10 +179,13 @@ void socketserver(int sck)
 
     //Start a loop of receiving contents
     int file_size = 0;
+    char *recv_data = NULL;
+
     while(!graceful_exit)
     {
         struct sockaddr_storage client_addr;
         socklen_t addr_size = sizeof client_addr;
+
         //Accept a connection
         int connection_fd = accept(sck, (struct sockaddr *) &client_addr, &addr_size);
         if(connection_fd == -1)
@@ -105,7 +193,7 @@ void socketserver(int sck)
             if(errno == EINTR)
             {
                 //The signal has set "graceful_exit" and the next while iteration will not happen
-                continue;
+                break;
             }
             else
             {
@@ -113,30 +201,23 @@ void socketserver(int sck)
                 exit(1);
             }
         }
-        //Get information from the client, assuming IPv4
-        //Credits: https://stackoverflow.com/questions/1276294/getting-ipv4-address-from-a-sockaddr-structure
-        if(client_addr.ss_family == AF_INET)
-        {
-            char addr[INET6_ADDRSTRLEN];
-            struct sockaddr_in *addr_in = (struct sockaddr_in *)&client_addr;
-            inet_ntop(AF_INET, &(addr_in->sin_addr), addr, INET_ADDRSTRLEN);
-            syslog(LOG_INFO, "Accepted connection from %s", addr);
-        }
-        else if(client_addr.ss_family == AF_INET6)
-        {
-            char addr[INET6_ADDRSTRLEN];
-            struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&client_addr;
-            inet_ntop(AF_INET6, &(addr_in6->sin6_addr), addr, INET6_ADDRSTRLEN);
-            syslog(LOG_INFO, "Accepted connection from %s", addr);
-        }
+
+        print_accepted_conn(client_addr);
 
         //Wait for data
         int recv_ret;
-        //Start with a size, potentially incresing it if an entire packet cannot fit into it
-        char *recv_data = malloc(sizeof(char)*RECV_BUFF_LEN);
         int index = 0;
         //Keep track of how many RECV_BUFF_LEN chunks "recv_data" has
         int chunks = 1;
+        
+        //Start with a size, potentially increasing it if an entire packet cannot fit into it
+        recv_data = malloc(sizeof(char)*RECV_BUFF_LEN*chunks);
+        if(!recv_data)
+        {
+            syslog(LOG_ERR, "Could not malloc: %s", strerror(errno));
+            exit(1);  
+        }
+
         do
         {
             recv_ret = recv(connection_fd, &recv_data[index], RECV_BUFF_LEN, 0);
@@ -160,6 +241,7 @@ void socketserver(int sck)
                         syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
                         exit(1);  
                     }
+
                     int written_bytes;
                     int len_to_write = index;
                     char *ptr_to_write = recv_data;
@@ -189,13 +271,16 @@ void socketserver(int sck)
                         exit(1);  
                     }
                     
-                    char *buff_read = malloc(sizeof(char) * file_size);
-                    char *buff_read_off = buff_read;
-                    int bytes_to_read = file_size;
-                    int read_bytes;
-                    while(bytes_to_read != 0)
+                    //Perform reads to send the file contents to the socket client
+                    int to_be_sent = file_size;
+                    char buff_read[RECV_BUFF_LEN];
+                    while(to_be_sent)
                     {
-                        read_bytes = read(file_fd, buff_read_off, bytes_to_read);
+                        int send_bytes = 0;
+                        int read_bytes = read(file_fd, buff_read, RECV_BUFF_LEN);
+                        if(read_bytes != 0)
+                            send_bytes = read_bytes;
+
                         if(read_bytes == -1)
                         {
                             //If the error is caused by an interruption of the system call try again
@@ -206,15 +291,34 @@ void socketserver(int sck)
                             syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
                             exit(1);
                         }
-                        bytes_to_read -= read_bytes;
-                        buff_read_off += read_bytes; 
-                    }
-                    //Send the contents back to the client
-                    send(connection_fd, buff_read, file_size, 0);
-                    //Free the used bufferr
-                    free(buff_read);
 
-                    //Reset index to loop again
+                        //Less bytes remaining
+                        to_be_sent -= read_bytes;
+                        
+                        //Send the contents back to the client
+                        int sent_bytes = -1;
+                        int send_off = 0;
+                        syslog(LOG_INFO, "Send bytes: %d", send_bytes);
+                        while(sent_bytes != 0)
+                        {
+                            sent_bytes = send(connection_fd, &buff_read[send_off], send_bytes, 0);
+                            if(sent_bytes == -1)
+                            {
+                                //If the error is caused by an interruption of the system call try again
+                                if(errno == EINTR)
+                                    continue;
+
+                                //Else, error occurred, print it to syslog and finish program
+                                syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
+                                exit(1);
+                            }
+                            send_bytes -= sent_bytes;
+                            send_off += sent_bytes;
+                        }
+                        
+                    }
+
+                    //Reset index to use the malloc'ed buffer from the beginning
                     index = 0;
                 }
                 //Realloc the array if it got full without an '\n'
@@ -222,52 +326,22 @@ void socketserver(int sck)
                 {
                     chunks++;
                     recv_data = realloc(recv_data, sizeof(char)*RECV_BUFF_LEN*chunks);
+                    if(!recv_data)
+                    {
+                        syslog(LOG_ERR, "Could not realloc: %s", strerror(errno));
+                        exit(1);  
+                    }
                 }
             }
 
         } while(recv_ret != 0 && !graceful_exit);
 
-        //Free the malloced space
+        //Free the used buffer
         free(recv_data);
-
-        if(client_addr.ss_family == AF_INET)
-        {
-            char addr[INET6_ADDRSTRLEN];
-            struct sockaddr_in *addr_in = (struct sockaddr_in *)&client_addr;
-            inet_ntop(AF_INET, &(addr_in->sin_addr), addr, INET_ADDRSTRLEN);
-            syslog(LOG_INFO, "Closed connection from %s", addr);
-        }
-        else if(client_addr.ss_family == AF_INET6)
-        {
-            char addr[INET6_ADDRSTRLEN];
-            struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&client_addr;
-            inet_ntop(AF_INET6, &(addr_in6->sin6_addr), addr, INET6_ADDRSTRLEN);
-            syslog(LOG_INFO, "Closed connection from %s", addr);
-        }
+        print_closed_conn(client_addr);
     }
 
-    //After stopping to accept requests, the socket can be closed
-    if(close(sck) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not close socket: %s", strerror(errno));
-        exit(1);
-    }
-    //Close the file used to log all the data received
-    if(close(file_fd) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not close log file: %s", strerror(errno));
-        exit(1);
-    }
-    //Delete the file
-    if(remove(LOG_PATH) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not remove log file: %s", strerror(errno));
-        exit(1);
-    }
-
+    exit_wrapper(sck, file_fd);
     return;
 }
 
@@ -334,6 +408,7 @@ int main(int c, char **argv)
         syslog(LOG_ERR, "An error occurred binding the socket: %s", strerror(errno));
         exit(1);        
     }
+
     //Free the addr linked list now that we have already used it
     freeaddrinfo(res);
 
