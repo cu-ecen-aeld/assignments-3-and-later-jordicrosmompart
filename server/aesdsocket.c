@@ -6,7 +6,8 @@
 * The contents obtained are appended in /var/tmp/aesdsocketdata
 * Once the client ends the connection, the full content of the file is returned to it
 * Logs acceptance and closure of connections
-* Accepts new clients until SIGINT or SIGTERM signals are received
+* Accepts new clients redirecting them to threads,
+* until SIGINT or SIGTERM signals are received.
 */
 
 //Includes
@@ -22,11 +23,27 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <sys/queue.h>
+#include <pthread.h>
 
 //Defines
 #define     SERVER_QUEUE    (10)
 #define     LOG_PATH        ("/var/tmp/aesdsocketdata")
 #define     RECV_BUFF_LEN   (1024)
+
+struct thread_t
+{
+    pthread_t thread_id;
+    int socket_client;
+    int socket_server;
+    int log_fd;
+    int finished;
+    int *file_size;
+    struct sockaddr_storage client_addr;
+
+    //Linked list node instance
+    SLIST_ENTRY(thread_t) node;
+};
 
 //Globals
 int graceful_exit = 0;
@@ -150,6 +167,172 @@ void exit_wrapper(int sck, int file_fd)
 }
 
 /**
+* serve_client
+* @brief Serves a client from a socket connection
+* 
+* The server functionality is described in more detail at
+* the file header.
+*
+* @return void
+*/
+void *serve_client(void *thread_info)
+{
+    struct thread_t *thread_info_parsed = (struct thread_t *) thread_info;
+
+    print_accepted_conn(thread_info_parsed->client_addr);
+
+    //Wait for data
+    int recv_ret;
+    int index = 0;
+    //Keep track of how many RECV_BUFF_LEN chunks "recv_data" has
+    int chunks = 1;
+    
+    //Start with a size, potentially increasing it if an entire packet cannot fit into it
+    char *recv_data = malloc(sizeof(char)*RECV_BUFF_LEN*chunks);
+    if(!recv_data)
+    {
+        syslog(LOG_ERR, "Could not malloc: %s", strerror(errno));
+        exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+        exit(1);  
+    }
+
+    do
+    {
+        recv_ret = recv(thread_info_parsed->socket_client, &recv_data[index], RECV_BUFF_LEN, 0);
+        if(recv_ret == -1)
+        {
+            syslog(LOG_ERR, "An error occurred reading from the socket: %s", strerror(errno));
+            exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+            free(recv_data);
+            exit(1);  
+        }
+        index += recv_ret;
+
+        if(index != 0)
+        {
+            //Check if the last value received is "\n"
+            if(recv_data[index - 1] == '\n')
+            {
+                //Put the contents into /var/tmp/aesdsocketdata
+                //Write the string to the file
+                //Send all the contents read from /var/tmp/aesdsocketdata back to the client
+                if(lseek(thread_info_parsed->log_fd, 0, SEEK_END) == -1)
+                {
+                    syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
+                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+                    free(recv_data);
+                    exit(1);  
+                }
+
+                int written_bytes;
+                int len_to_write = index;
+                char *ptr_to_write = recv_data;
+                while(len_to_write != 0)
+                {
+                    written_bytes = write(thread_info_parsed->log_fd, ptr_to_write, len_to_write);
+                    if(written_bytes == -1)
+                    {
+                        //If the error is caused by an interruption of the system call try again
+                        if(errno == EINTR)
+                            continue;
+
+                        //Else, error occurred, print it to syslog and finish program
+                        syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
+                        exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+                        free(recv_data);
+                        exit(1);
+                    }
+                    len_to_write -= written_bytes;
+                    ptr_to_write += written_bytes; 
+                }
+
+                *thread_info_parsed->file_size = *thread_info_parsed->file_size + index;
+
+                //Send all the contents read from /var/tmp/aesdsocketdata back to the client
+                if(lseek(thread_info_parsed->log_fd, 0, SEEK_SET) == -1)
+                {
+                    syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
+                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+                    free(recv_data);
+                    exit(1);  
+                }
+                
+                //Perform reads to send the file contents to the socket client
+                int to_be_sent = *thread_info_parsed->file_size;
+                char buff_read[RECV_BUFF_LEN];
+                while(to_be_sent)
+                {
+                    int send_bytes = 0;
+                    int read_bytes = read(thread_info_parsed->log_fd, buff_read, RECV_BUFF_LEN);
+                    if(read_bytes != 0)
+                        send_bytes = read_bytes;
+
+                    if(read_bytes == -1)
+                    {
+                        //If the error is caused by an interruption of the system call try again
+                        if(errno == EINTR)
+                            continue;
+
+                        //Else, error occurred, print it to syslog and finish program
+                        syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
+                        exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+                        free(recv_data);
+                        exit(1);
+                    }
+
+                    //Less bytes remaining
+                    to_be_sent -= read_bytes;
+                    
+                    //Send the contents back to the client
+                    int sent_bytes = -1;
+                    int send_off = 0;
+                    while(sent_bytes != 0)
+                    {
+                        sent_bytes = send(thread_info_parsed->socket_client, &buff_read[send_off], send_bytes, 0);
+                        if(sent_bytes == -1)
+                        {
+                            //If the error is caused by an interruption of the system call try again
+                            if(errno == EINTR)
+                                continue;
+
+                            //Else, error occurred, print it to syslog and finish program
+                            syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
+                            exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+                            free(recv_data);
+                            exit(1);
+                        }
+                        send_bytes -= sent_bytes;
+                        send_off += sent_bytes;
+                    }
+                    
+                }
+
+                //Reset index to use the malloc'ed buffer from the beginning
+                index = 0;
+            }
+            //Realloc the array if it got full without an '\n'
+            else if(index == (RECV_BUFF_LEN*chunks))
+            {
+                chunks++;
+                recv_data = realloc(recv_data, sizeof(char)*RECV_BUFF_LEN*chunks);
+                if(!recv_data)
+                {
+                    syslog(LOG_ERR, "Could not realloc: %s", strerror(errno));
+                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+                    exit(1);  
+                }
+            }
+        }
+
+    } while(recv_ret != 0 && !graceful_exit);
+
+    //Free the used buffer
+    free(recv_data);
+    print_closed_conn(thread_info_parsed->client_addr);
+    return NULL;
+}
+
+/**
 * socketserver
 * @brief Creates a server listening to port 9000
 * 
@@ -177,10 +360,14 @@ void socketserver(int sck)
         exit(1);  
     }
 
+    //Set up the linked list of threads
+    SLIST_HEAD(head_s, thread_t) head;
+    //Initialize it
+    SLIST_INIT(&head);
+
     //Start a loop of receiving contents
     int file_size = 0;
-    char *recv_data = NULL;
-
+    
     while(!graceful_exit)
     {
         struct sockaddr_storage client_addr;
@@ -198,147 +385,51 @@ void socketserver(int sck)
             else
             {
                 syslog(LOG_ERR, "An error occurred accepting a new connection to the socket: %s", strerror(errno));
+                exit_wrapper(sck, file_fd);
                 exit(1);
             }
         }
 
-        print_accepted_conn(client_addr);
-
-        //Wait for data
-        int recv_ret;
-        int index = 0;
-        //Keep track of how many RECV_BUFF_LEN chunks "recv_data" has
-        int chunks = 1;
+        //Add new service information to a new element of the thread linked list
+        struct thread_t *new = malloc(sizeof(struct thread_t));
+        new->socket_client = connection_fd;
+        new->finished = 0;
+        new->socket_server = sck;
+        new->log_fd = file_fd;
+        new->file_size = &file_size;
+        memcpy((void *) &new->client_addr, (const void *) &client_addr, sizeof(struct sockaddr_storage));
         
-        //Start with a size, potentially increasing it if an entire packet cannot fit into it
-        recv_data = malloc(sizeof(char)*RECV_BUFF_LEN*chunks);
-        if(!recv_data)
-        {
-            syslog(LOG_ERR, "Could not malloc: %s", strerror(errno));
+        //Create the thread that will serve the client
+        if(pthread_create(&new->thread_id, NULL, serve_client, (void *) new) != 0)
+        {            
+            syslog(LOG_ERR, "Could not create new thread: %s", strerror(errno));
+            exit_wrapper(sck, file_fd);
             exit(1);  
         }
 
-        do
+        //Add the thread information to the linked list
+        SLIST_INSERT_HEAD(&head, new, node);
+
+        //Terminate those threads that have finalized
+        struct thread_t *element = NULL;
+
+        SLIST_FOREACH(element, &head, node)
         {
-            recv_ret = recv(connection_fd, &recv_data[index], RECV_BUFF_LEN, 0);
-            if(recv_ret == -1)
+            if(element->finished)
             {
-                syslog(LOG_ERR, "An error occurred reading from the socket: %s", strerror(errno));
-                exit(1);  
-            }
-            index += recv_ret;
-
-            if(index != 0)
-            {
-                //Check if the last value received is "\n"
-                if(recv_data[index - 1] == '\n')
+                SLIST_REMOVE(&head, element, thread_t, node);
+                //Join the thread
+                if(pthread_join(element->thread_id, NULL) != 0)
                 {
-                    //Put the contents into /var/tmp/aesdsocketdata
-                    //Write the string to the file
-                    //Send all the contents read from /var/tmp/aesdsocketdata back to the client
-                    if(lseek(file_fd, 0, SEEK_END) == -1)
-                    {
-                        syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
-                        exit(1);  
-                    }
-
-                    int written_bytes;
-                    int len_to_write = index;
-                    char *ptr_to_write = recv_data;
-                    while(len_to_write != 0)
-                    {
-                        written_bytes = write(file_fd, ptr_to_write, len_to_write);
-                        if(written_bytes == -1)
-                        {
-                            //If the error is caused by an interruption of the system call try again
-                            if(errno == EINTR)
-                                continue;
-
-                            //Else, error occurred, print it to syslog and finish program
-                            syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
-                            exit(1);
-                        }
-                        len_to_write -= written_bytes;
-                        ptr_to_write += written_bytes; 
-                    }
-
-                    file_size += index;
-
-                    //Send all the contents read from /var/tmp/aesdsocketdata back to the client
-                    if(lseek(file_fd, 0, SEEK_SET) == -1)
-                    {
-                        syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
-                        exit(1);  
-                    }
-                    
-                    //Perform reads to send the file contents to the socket client
-                    int to_be_sent = file_size;
-                    char buff_read[RECV_BUFF_LEN];
-                    while(to_be_sent)
-                    {
-                        int send_bytes = 0;
-                        int read_bytes = read(file_fd, buff_read, RECV_BUFF_LEN);
-                        if(read_bytes != 0)
-                            send_bytes = read_bytes;
-
-                        if(read_bytes == -1)
-                        {
-                            //If the error is caused by an interruption of the system call try again
-                            if(errno == EINTR)
-                                continue;
-
-                            //Else, error occurred, print it to syslog and finish program
-                            syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
-                            exit(1);
-                        }
-
-                        //Less bytes remaining
-                        to_be_sent -= read_bytes;
-                        
-                        //Send the contents back to the client
-                        int sent_bytes = -1;
-                        int send_off = 0;
-                        syslog(LOG_INFO, "Send bytes: %d", send_bytes);
-                        while(sent_bytes != 0)
-                        {
-                            sent_bytes = send(connection_fd, &buff_read[send_off], send_bytes, 0);
-                            if(sent_bytes == -1)
-                            {
-                                //If the error is caused by an interruption of the system call try again
-                                if(errno == EINTR)
-                                    continue;
-
-                                //Else, error occurred, print it to syslog and finish program
-                                syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
-                                exit(1);
-                            }
-                            send_bytes -= sent_bytes;
-                            send_off += sent_bytes;
-                        }
-                        
-                    }
-
-                    //Reset index to use the malloc'ed buffer from the beginning
-                    index = 0;
+                    syslog(LOG_ERR, "Could not join thread: %s", strerror(errno));
+                    exit_wrapper(sck, file_fd);
+                    exit(1);  
                 }
-                //Realloc the array if it got full without an '\n'
-                else if(index == (RECV_BUFF_LEN*chunks))
-                {
-                    chunks++;
-                    recv_data = realloc(recv_data, sizeof(char)*RECV_BUFF_LEN*chunks);
-                    if(!recv_data)
-                    {
-                        syslog(LOG_ERR, "Could not realloc: %s", strerror(errno));
-                        exit(1);  
-                    }
-                }
+                //Free the memory used by the structure
+                free(element);
             }
+        }
 
-        } while(recv_ret != 0 && !graceful_exit);
-
-        //Free the used buffer
-        free(recv_data);
-        print_closed_conn(client_addr);
     }
 
     exit_wrapper(sck, file_fd);
@@ -396,7 +487,6 @@ int main(int c, char **argv)
     }
 
     //Create the socket file descriptor
-
     int sck = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if(sck == -1)
     {
