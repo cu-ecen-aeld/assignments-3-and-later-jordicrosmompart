@@ -135,39 +135,6 @@ void print_closed_conn(struct sockaddr_storage client_addr)
 }
 
 /**
-* exit_wrapper
-* @brief Closes socket and used files before exiting
-* 
-* @param int    socket fd
-* @param int    log fd+
-* @return void
-*/
-void exit_wrapper(int sck, int file_fd)
-{
-    //After stopping to accept requests, the socket can be closed
-    if(close(sck) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not close socket: %s", strerror(errno));
-        exit(1);
-    }
-    //Close the file used to log all the data received
-    if(close(file_fd) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not close log file: %s", strerror(errno));
-        exit(1);
-    }
-    //Delete the file
-    if(remove(LOG_PATH) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not remove log file: %s", strerror(errno));
-        exit(1);
-    }
-}
-
-/**
 * serve_client
 * @brief Serves a client from a socket connection
 * 
@@ -193,8 +160,7 @@ void *serve_client(void *thread_info)
     if(!recv_data)
     {
         syslog(LOG_ERR, "Could not malloc: %s", strerror(errno));
-        exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-        exit(1);  
+        goto exit_nofree; 
     }
 
     do
@@ -203,9 +169,7 @@ void *serve_client(void *thread_info)
         if(recv_ret == -1)
         {
             syslog(LOG_ERR, "An error occurred reading from the socket: %s", strerror(errno));
-            exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-            free(recv_data);
-            exit(1);  
+            goto exit_all;  
         }
         index += recv_ret;
 
@@ -220,8 +184,7 @@ void *serve_client(void *thread_info)
                 if(ret != 0)
                 {
                     syslog(LOG_ERR, "Could not lock mutex: %s", strerror(ret));
-                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-                    exit(1);  
+                    goto exit_all;  
                 }
 
                 //Put the contents into /var/tmp/aesdsocketdata
@@ -230,9 +193,7 @@ void *serve_client(void *thread_info)
                 if(lseek(thread_info_parsed->log_fd, 0, SEEK_END) == -1)
                 {
                     syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
-                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-                    free(recv_data);
-                    exit(1);  
+                    goto exit_all;  
                 }
 
                 int written_bytes;
@@ -249,9 +210,7 @@ void *serve_client(void *thread_info)
 
                         //Else, error occurred, print it to syslog and finish program
                         syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
-                        exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-                        free(recv_data);
-                        exit(1);
+                        goto exit_all; 
                     }
                     len_to_write -= written_bytes;
                     ptr_to_write += written_bytes; 
@@ -263,9 +222,7 @@ void *serve_client(void *thread_info)
                 if(lseek(thread_info_parsed->log_fd, 0, SEEK_SET) == -1)
                 {
                     syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
-                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-                    free(recv_data);
-                    exit(1);  
+                    goto exit_all; 
                 }
                 
                 //Perform reads to send the file contents to the socket client
@@ -286,9 +243,7 @@ void *serve_client(void *thread_info)
 
                         //Else, error occurred, print it to syslog and finish program
                         syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
-                        exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-                        free(recv_data);
-                        exit(1);
+                        goto exit_all; 
                     }
 
                     //Less bytes remaining
@@ -308,9 +263,7 @@ void *serve_client(void *thread_info)
 
                             //Else, error occurred, print it to syslog and finish program
                             syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
-                            exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-                            free(recv_data);
-                            exit(1);
+                            goto exit_all; 
                         }
                         send_bytes -= sent_bytes;
                         send_off += sent_bytes;
@@ -326,8 +279,7 @@ void *serve_client(void *thread_info)
                 if(ret != 0)
                 {
                     syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
-                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-                    exit(1);  
+                    goto exit_all; 
                 }
             }
             //Realloc the array if it got full without an '\n'
@@ -338,17 +290,32 @@ void *serve_client(void *thread_info)
                 if(!recv_data)
                 {
                     syslog(LOG_ERR, "Could not realloc: %s", strerror(errno));
-                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
-                    exit(1);  
+                    goto exit_all; 
                 }
             }
         }
 
     } while(recv_ret != 0 && !graceful_exit);
 
+exit_all:
     //Free the used buffer
     free(recv_data);
+exit_nofree:
+    //Close the client socket if the client did not close it first
+    if(recv_ret != 0)
+    {
+        if(close(thread_info_parsed->socket_client) == -1)
+        {
+            //Else, error occurred, print it to syslog and finish program
+            syslog(LOG_ERR, "Could not close socket: %s", strerror(errno));
+            exit(1);
+        }
+    }
+    //Inform the main thread that this thread is finished
+    thread_info_parsed->finished = 1;
+
     print_closed_conn(thread_info_parsed->client_addr);
+
     return NULL;
 }
 
@@ -367,7 +334,7 @@ void socketserver(int sck)
     if(listen(sck, SERVER_QUEUE) == -1)
     {
         syslog(LOG_ERR, "An error occurred listening the socket: %s", strerror(errno));
-        exit(1);        
+        return;        
     }
 
     syslog(LOG_INFO, "The server is listening to port 9000");
@@ -377,7 +344,7 @@ void socketserver(int sck)
     if(file_fd == -1)
     {
         syslog(LOG_ERR, "Could not create the log file: %s", strerror(errno));
-        exit(1);  
+        return;  
     }
 
     //Set up the linked list of threads
@@ -403,13 +370,13 @@ void socketserver(int sck)
             if(errno == EINTR)
             {
                 //The signal has set "graceful_exit" and the next while iteration will not happen
-                break;
+                continue;
             }
             else
             {
                 syslog(LOG_ERR, "An error occurred accepting a new connection to the socket: %s", strerror(errno));
-                exit_wrapper(sck, file_fd);
-                exit(1);
+                //Implementation defined: wait for next request, not terminate server
+                continue;
             }
         }
 
@@ -428,8 +395,9 @@ void socketserver(int sck)
         if(ret!= 0)
         {            
             syslog(LOG_ERR, "Could not create new thread: %s", strerror(ret));
-            exit_wrapper(sck, file_fd);
-            exit(1);  
+
+            //Implementation defined: wait for next request, not terminate server
+            continue; 
         }
 
         //Add the thread information to the linked list
@@ -437,7 +405,6 @@ void socketserver(int sck)
 
         //Terminate those threads that have finalized
         struct thread_t *element = NULL;
-
         SLIST_FOREACH(element, &head, node)
         {
             if(element->finished)
@@ -448,8 +415,7 @@ void socketserver(int sck)
                 if(ret != 0)
                 {
                     syslog(LOG_ERR, "Could not join thread: %s", strerror(ret));
-                    exit_wrapper(sck, file_fd);
-                    exit(1);  
+                    break;  
                 }
                 //Free the memory used by the structure
                 free(element);
@@ -458,7 +424,50 @@ void socketserver(int sck)
 
     }
 
-    exit_wrapper(sck, file_fd);
+    //Make sure all threads finish and are joined
+    while(!SLIST_EMPTY(&head))
+    {
+        struct thread_t *element = NULL;
+        SLIST_FOREACH(element, &head, node)
+        {
+            if(element->finished)
+            {
+                SLIST_REMOVE(&head, element, thread_t, node);
+                //Join the thread
+                int ret = pthread_join(element->thread_id, NULL);
+                if(ret != 0)
+                {
+                    syslog(LOG_ERR, "Could not join thread: %s", strerror(ret));
+                    continue;  
+                }
+                //Free the memory used by the structure
+                free(element);
+            }
+        }
+    }
+
+    //After stopping to accept requests, the socket can be closed
+    if(close(sck) == -1)
+    {
+        //Else, error occurred, print it to syslog and finish program
+        syslog(LOG_ERR, "Could not close socket: %s", strerror(errno));
+        //Even though error, try to close following files
+    }
+    //Close the file used to log all the data received
+    if(close(file_fd) == -1)
+    {
+        //Else, error occurred, print it to syslog and finish program
+        syslog(LOG_ERR, "Could not close log file: %s", strerror(errno));
+        exit(1);
+    }
+    //Delete the file
+    if(remove(LOG_PATH) == -1)
+    {
+        //Else, error occurred, print it to syslog and finish program
+        syslog(LOG_ERR, "Could not remove log file: %s", strerror(errno));
+        exit(1);
+    }
+
     return;
 }
 
@@ -535,6 +544,8 @@ int main(int c, char **argv)
         syslog(LOG_INFO, "Server running in no-daemon mode.");
         //Handle server
         socketserver(sck);
+
+        exit(0);
     }
     else if(c == 1 + 1)
     {
