@@ -37,6 +37,7 @@ struct thread_t
     int socket_client;
     int socket_server;
     int log_fd;
+    pthread_mutex_t *mutex;
     int finished;
     int *file_size;
     struct sockaddr_storage client_addr;
@@ -213,6 +214,16 @@ void *serve_client(void *thread_info)
             //Check if the last value received is "\n"
             if(recv_data[index - 1] == '\n')
             {
+                //When a newline is received, the entire message can be processed. 
+                //Lock the use of the file descriptor
+                int ret = pthread_mutex_lock(thread_info_parsed->mutex);
+                if(ret != 0)
+                {
+                    syslog(LOG_ERR, "Could not lock mutex: %s", strerror(ret));
+                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+                    exit(1);  
+                }
+
                 //Put the contents into /var/tmp/aesdsocketdata
                 //Write the string to the file
                 //Send all the contents read from /var/tmp/aesdsocketdata back to the client
@@ -309,6 +320,15 @@ void *serve_client(void *thread_info)
 
                 //Reset index to use the malloc'ed buffer from the beginning
                 index = 0;
+
+                //The lock can be freed
+                ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                if(ret != 0)
+                {
+                    syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                    exit_wrapper(thread_info_parsed->socket_server, thread_info_parsed->log_fd);
+                    exit(1);  
+                }
             }
             //Realloc the array if it got full without an '\n'
             else if(index == (RECV_BUFF_LEN*chunks))
@@ -365,6 +385,9 @@ void socketserver(int sck)
     //Initialize it
     SLIST_INIT(&head);
 
+    //Initialize mutex
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
     //Start a loop of receiving contents
     int file_size = 0;
     
@@ -397,12 +420,14 @@ void socketserver(int sck)
         new->socket_server = sck;
         new->log_fd = file_fd;
         new->file_size = &file_size;
+        new->mutex = &mutex;
         memcpy((void *) &new->client_addr, (const void *) &client_addr, sizeof(struct sockaddr_storage));
         
         //Create the thread that will serve the client
-        if(pthread_create(&new->thread_id, NULL, serve_client, (void *) new) != 0)
+        int ret = pthread_create(&new->thread_id, NULL, serve_client, (void *) new);
+        if(ret!= 0)
         {            
-            syslog(LOG_ERR, "Could not create new thread: %s", strerror(errno));
+            syslog(LOG_ERR, "Could not create new thread: %s", strerror(ret));
             exit_wrapper(sck, file_fd);
             exit(1);  
         }
@@ -419,9 +444,10 @@ void socketserver(int sck)
             {
                 SLIST_REMOVE(&head, element, thread_t, node);
                 //Join the thread
-                if(pthread_join(element->thread_id, NULL) != 0)
+                ret = pthread_join(element->thread_id, NULL);
+                if(ret != 0)
                 {
-                    syslog(LOG_ERR, "Could not join thread: %s", strerror(errno));
+                    syslog(LOG_ERR, "Could not join thread: %s", strerror(ret));
                     exit_wrapper(sck, file_fd);
                     exit(1);  
                 }
