@@ -132,7 +132,7 @@ void timestamp_handler(int sig)
         if(lseek(file_fd, 0, SEEK_END) == -1)
         {
             syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
-            goto mutex_release; 
+            goto exit_all; 
         }
         
         int written_bytes;
@@ -149,7 +149,7 @@ void timestamp_handler(int sig)
 
                 //Else, error occurred, print it to syslog and finish program
                 syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
-                goto mutex_release; 
+                goto exit_all; 
             }
             len_to_write -= written_bytes;
             ptr_to_write += written_bytes; 
@@ -157,6 +157,8 @@ void timestamp_handler(int sig)
 
         file_size += strlen(buff);
 
+exit_all:
+        free(buff);
 mutex_release:
         //Release mutex
         ret = pthread_mutex_unlock(&mutex);
@@ -497,7 +499,7 @@ void socketserver(int sck)
 	if(ret == -1)
     {
         syslog(LOG_ERR, "Could not create timer: %s", strerror(errno));
-        goto exit_filesck; 
+        goto exit_all; 
     }
 		
 	struct sigaction action;
@@ -621,6 +623,14 @@ void socketserver(int sck)
                 free(element);
             }
         }
+    }
+
+exit_all:
+    ret = timer_delete(timer);
+    if(ret == -1)
+    {
+        syslog(LOG_ERR, "Could not create timer: %s", strerror(errno));
+        goto exit_filesck; 
     }
 
 exit_filesck:
