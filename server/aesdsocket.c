@@ -25,6 +25,7 @@
 #include <arpa/inet.h>
 #include <sys/queue.h>
 #include <pthread.h>
+#include <time.h>
 
 //Defines
 #define     SERVER_QUEUE    (10)
@@ -48,6 +49,9 @@ struct thread_t
 
 //Globals
 int graceful_exit = 0;
+int file_fd = 0;
+int file_size = 0;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /**
 * usage
@@ -79,6 +83,88 @@ void signalhandler(int sig)
        syslog(LOG_INFO, "Caught signal, exiting");
     
        graceful_exit = 1;
+    }
+}
+
+
+/**
+* timestamp_handler
+* @brief Handles the timestamping of the server log file.
+*
+* @param  int signal that triggered this function
+* @return void
+*/
+void timestamp_handler(int sig)
+{
+    if(sig == SIGALRM)
+    {
+        syslog(LOG_INFO, "10 seconds passed, printing timestamp");
+        int ret = pthread_mutex_lock(&mutex);
+        if(ret != 0)
+        {
+            syslog(LOG_ERR, "Could not lock mutex: %s", strerror(ret));
+            exit(1);  
+        }
+
+        //Get the timestamp
+        char timestr[200];
+        time_t t;
+        struct tm *t2;
+
+        t = time(NULL);
+        t2 = localtime(&t);
+        if (t2 == NULL) 
+        {
+            syslog(LOG_ERR, "Could not get local time");
+            goto mutex_release; 
+        }
+        strcpy(timestr, "timestamp:");
+        strftime(&timestr[10], sizeof(timestr) - 10, "%a, %d %b %Y %T %z", t2);
+        char *buff = malloc(sizeof(char) * strlen(timestr) + 2);
+        if(!buff)
+        {
+            syslog(LOG_ERR, "Could not allocate memory for the timestamp: %s", strerror(errno));
+            goto mutex_release; 
+        }
+        sprintf(buff, "%s%s", timestr, "\n");
+
+        //Write it appending to the file
+        if(lseek(file_fd, 0, SEEK_END) == -1)
+        {
+            syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
+            goto mutex_release; 
+        }
+        
+        int written_bytes;
+        int len_to_write = strlen(buff);
+        char *ptr_to_write = buff;
+        while(len_to_write != 0)
+        {
+            written_bytes = write(file_fd, ptr_to_write, len_to_write);
+            if(written_bytes == -1)
+            {
+                //If the error is caused by an interruption of the system call try again
+                if(errno == EINTR)
+                    continue;
+
+                //Else, error occurred, print it to syslog and finish program
+                syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
+                goto mutex_release; 
+            }
+            len_to_write -= written_bytes;
+            ptr_to_write += written_bytes; 
+        }
+
+        file_size += strlen(buff);
+
+mutex_release:
+        //Release mutex
+        ret = pthread_mutex_unlock(&mutex);
+        if(ret != 0)
+        {
+            syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+            exit(1); 
+        }
     }
 }
 
@@ -190,9 +276,15 @@ void *serve_client(void *thread_info)
                 //Put the contents into /var/tmp/aesdsocketdata
                 //Write the string to the file
                 //Send all the contents read from /var/tmp/aesdsocketdata back to the client
+                
                 if(lseek(thread_info_parsed->log_fd, 0, SEEK_END) == -1)
                 {
                     syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
+                    ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                    if(ret != 0)
+                    {
+                        syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                    }
                     goto exit_all;  
                 }
 
@@ -206,10 +298,24 @@ void *serve_client(void *thread_info)
                     {
                         //If the error is caused by an interruption of the system call try again
                         if(errno == EINTR)
+                        {
+                            //Free the mutex
+                            ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                            if(ret != 0)
+                            {
+                                syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                            }
                             continue;
+                        }
+                           
 
                         //Else, error occurred, print it to syslog and finish program
                         syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
+                        ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                        if(ret != 0)
+                        {
+                            syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                        }
                         goto exit_all; 
                     }
                     len_to_write -= written_bytes;
@@ -222,14 +328,21 @@ void *serve_client(void *thread_info)
                 if(lseek(thread_info_parsed->log_fd, 0, SEEK_SET) == -1)
                 {
                     syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
+                    ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                    if(ret != 0)
+                    {
+                        syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                    }
                     goto exit_all; 
                 }
                 
                 //Perform reads to send the file contents to the socket client
                 int to_be_sent = *thread_info_parsed->file_size;
                 char buff_read[RECV_BUFF_LEN];
+    
                 while(to_be_sent)
                 {
+                    syslog(LOG_INFO, "To be sent is: %d", to_be_sent);
                     int send_bytes = 0;
                     int read_bytes = read(thread_info_parsed->log_fd, buff_read, RECV_BUFF_LEN);
                     if(read_bytes != 0)
@@ -239,10 +352,24 @@ void *serve_client(void *thread_info)
                     {
                         //If the error is caused by an interruption of the system call try again
                         if(errno == EINTR)
+                        {
+                            //Free the mutex
+                            ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                            if(ret != 0)
+                            {
+                                syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                            }
+
                             continue;
+                        }
 
                         //Else, error occurred, print it to syslog and finish program
                         syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
+                        ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                        if(ret != 0)
+                        {
+                            syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                        }
                         goto exit_all; 
                     }
 
@@ -259,10 +386,23 @@ void *serve_client(void *thread_info)
                         {
                             //If the error is caused by an interruption of the system call try again
                             if(errno == EINTR)
+                            {
+                                //Free the mutex
+                                ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                                if(ret != 0)
+                                {
+                                    syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                                }
                                 continue;
+                            }
 
                             //Else, error occurred, print it to syslog and finish program
                             syslog(LOG_ERR, "Could not read from the file: %s", strerror(errno));
+                            ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                            if(ret != 0)
+                            {
+                                syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                            }
                             goto exit_all; 
                         }
                         send_bytes -= sent_bytes;
@@ -340,11 +480,53 @@ void socketserver(int sck)
     syslog(LOG_INFO, "The server is listening to port 9000");
 
     //Create the file that will log the messages received
-    int file_fd = open(LOG_PATH, O_CREAT | O_RDWR | O_TRUNC, 0666);
+    file_fd = open(LOG_PATH, O_CREAT | O_RDWR | O_TRUNC, 0666);
     if(file_fd == -1)
     {
         syslog(LOG_ERR, "Could not create the log file: %s", strerror(errno));
-        return;  
+        goto exit_sck;  
+    }
+
+    //Create an interval timer to timestamp the file
+    struct itimerspec interval_time;
+	struct itimerspec last_interval_time;
+
+	//Set up to signal SIGALRM if timer expires
+    timer_t timer = 0;
+	int ret = timer_create(CLOCK_REALTIME, NULL, &timer);
+	if(ret == -1)
+    {
+        syslog(LOG_ERR, "Could not create timer: %s", strerror(errno));
+        goto exit_filesck; 
+    }
+		
+	struct sigaction action;
+    action.sa_handler = timestamp_handler;
+    action.sa_flags = 0;
+    sigset_t empty;
+    if(sigemptyset(&empty) == -1)
+    {
+        syslog(LOG_ERR, "Could not set up empty signal set: %s.", strerror(errno));
+        goto exit_filesck; 
+    }
+    action.sa_mask = empty;
+    if(sigaction(SIGALRM, &action, NULL) == -1)
+    {
+        syslog(LOG_ERR, "Could not set up handle for SIGINT: %s.", strerror(errno));
+        goto exit_filesck;
+    }
+
+	//Arm the interval timer
+	interval_time.it_interval.tv_sec = 10;
+	interval_time.it_interval.tv_nsec = 0;
+	interval_time.it_value.tv_sec = 10;
+	interval_time.it_value.tv_nsec = 0;
+
+	ret = timer_settime(timer, 0, &interval_time, &last_interval_time);
+	if(ret)
+    {
+        syslog(LOG_ERR, "Could not create timer: %s", strerror(errno));
+        goto exit_filesck; 
     }
 
     //Set up the linked list of threads
@@ -352,12 +534,7 @@ void socketserver(int sck)
     //Initialize it
     SLIST_INIT(&head);
 
-    //Initialize mutex
-    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
-    //Start a loop of receiving contents
-    int file_size = 0;
-    
+    //Start a loop of receiving contents  
     while(!graceful_exit)
     {
         struct sockaddr_storage client_addr;
@@ -446,13 +623,7 @@ void socketserver(int sck)
         }
     }
 
-    //After stopping to accept requests, the socket can be closed
-    if(close(sck) == -1)
-    {
-        //Else, error occurred, print it to syslog and finish program
-        syslog(LOG_ERR, "Could not close socket: %s", strerror(errno));
-        //Even though error, try to close following files
-    }
+exit_filesck:
     //Close the file used to log all the data received
     if(close(file_fd) == -1)
     {
@@ -466,6 +637,14 @@ void socketserver(int sck)
         //Else, error occurred, print it to syslog and finish program
         syslog(LOG_ERR, "Could not remove log file: %s", strerror(errno));
         exit(1);
+    }
+exit_sck:
+    //After stopping to accept requests, the socket can be closed
+    if(close(sck) == -1)
+    {
+        //Else, error occurred, print it to syslog and finish program
+        syslog(LOG_ERR, "Could not close socket: %s", strerror(errno));
+        //Even though error, try to close following files
     }
 
     return;
