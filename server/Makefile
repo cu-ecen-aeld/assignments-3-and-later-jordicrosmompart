@@ -8,7 +8,7 @@ CROSS_COMPILE=
 CC=$(CROSS_COMPILE)gcc
 
 all: $(INCLUDES)
-	$(CC) -Werror -Wall -g $(INCLUDES) -o $(OUTPUT)
+	$(CC) -Werror -Wall -ltr -lpthread -g $(INCLUDES) -o $(OUTPUT)
 
 clean:
 	rm -f $(OUTPUT)
