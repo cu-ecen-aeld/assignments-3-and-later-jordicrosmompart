@@ -23,7 +23,7 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
-#include <sys/queue.h>
+#include "queue.h"
 #include <pthread.h>
 #include <time.h>
 
@@ -581,33 +581,14 @@ void socketserver(int sck)
 
         //Add the thread information to the linked list
         SLIST_INSERT_HEAD(&head, new, node);
-
-        //Terminate those threads that have finalized
-        struct thread_t *element = NULL;
-        SLIST_FOREACH(element, &head, node)
-        {
-            if(element->finished)
-            {
-                SLIST_REMOVE(&head, element, thread_t, node);
-                //Join the thread
-                ret = pthread_join(element->thread_id, NULL);
-                if(ret != 0)
-                {
-                    syslog(LOG_ERR, "Could not join thread: %s", strerror(ret));
-                    break;  
-                }
-                //Free the memory used by the structure
-                free(element);
-            }
-        }
-
     }
 
     //Make sure all threads finish and are joined
     while(!SLIST_EMPTY(&head))
     {
         struct thread_t *element = NULL;
-        SLIST_FOREACH(element, &head, node)
+        struct thread_t *tmp = NULL;
+        SLIST_FOREACH_SAFE(element, &head, node, tmp)
         {
             if(element->finished)
             {
