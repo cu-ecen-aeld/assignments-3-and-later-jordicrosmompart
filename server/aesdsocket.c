@@ -26,6 +26,7 @@
 #include "queue.h"
 #include <pthread.h>
 #include <time.h>
+#include <semaphore.h>
 
 //Defines
 #define     SERVER_QUEUE    (10)
@@ -52,6 +53,7 @@ int graceful_exit = 0;
 int file_fd = 0;
 int file_size = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+sem_t sem_timestamp;
 
 /**
 * usage
@@ -83,21 +85,42 @@ void signalhandler(int sig)
        syslog(LOG_INFO, "Caught signal, exiting");
     
        graceful_exit = 1;
+
+       //Enable semaphore to speed up exit
+       sem_post(&sem_timestamp);
     }
 }
 
+/**
+* timestamp_handler
+* @brief Handles the time alarm.
+*
+* @param  int signal that triggered this function
+* @return void
+*/
+void sigalrm_handler(int sig)
+{
+    if(sig == SIGALRM)
+    {
+        //Enable semaphore
+        sem_post(&sem_timestamp);
+    }
+}
 
 /**
 * timestamp_handler
 * @brief Handles the timestamping of the server log file.
 *
-* @param  int signal that triggered this function
+* @param  void * void
 * @return void
 */
-void timestamp_handler(int sig)
+void *timestamp_handler(void *unused)
 {
-    if(sig == SIGALRM)
+    while(!graceful_exit)
     {
+        //Wait for the semaphore to be set by the SIGALRM handler
+        sem_wait(&sem_timestamp);
+
         syslog(LOG_INFO, "10 seconds passed, printing timestamp");
         int ret = pthread_mutex_lock(&mutex);
         if(ret != 0)
@@ -157,9 +180,9 @@ void timestamp_handler(int sig)
 
         file_size += strlen(buff);
 
-exit_all:
+    exit_all:
         free(buff);
-mutex_release:
+    mutex_release:
         //Release mutex
         ret = pthread_mutex_unlock(&mutex);
         if(ret != 0)
@@ -168,6 +191,8 @@ mutex_release:
             exit(1); 
         }
     }
+
+    return NULL;
 }
 
 /**
@@ -503,7 +528,7 @@ void socketserver(int sck)
     }
 		
 	struct sigaction action;
-    action.sa_handler = timestamp_handler;
+    action.sa_handler = sigalrm_handler;
     action.sa_flags = 0;
     sigset_t empty;
     if(sigemptyset(&empty) == -1)
@@ -529,6 +554,24 @@ void socketserver(int sck)
     {
         syslog(LOG_ERR, "Could not create timer: %s", strerror(errno));
         goto exit_filesck; 
+    }
+
+    //Initialize Semaphore associated with timestamping
+    if(sem_init(&sem_timestamp, 0, 0) == -1)
+    {
+        syslog(LOG_ERR, "Could not create semaphore: %s", strerror(errno));
+        goto exit_filescktm; 
+    }
+
+    //Initialize the timestamp handling thread, preventing the use of reentrant functions inside an alarm handler
+    pthread_t timestamp_thread;
+    ret = pthread_create(&timestamp_thread, NULL, timestamp_handler, NULL);
+    if(ret!= 0)
+    {            
+        syslog(LOG_ERR, "Could not create new thread: %s", strerror(ret));
+
+        //Implementation defined: wait for next request, not terminate server
+        goto exit_all; 
     }
 
     //Set up the linked list of threads
@@ -581,6 +624,26 @@ void socketserver(int sck)
 
         //Add the thread information to the linked list
         SLIST_INSERT_HEAD(&head, new, node);
+
+        //Perform cleaning of the current list on every new connection
+        struct thread_t *element = NULL;
+        struct thread_t *tmp = NULL;
+        SLIST_FOREACH_SAFE(element, &head, node, tmp)
+        {
+            if(element->finished)
+            {
+                SLIST_REMOVE(&head, element, thread_t, node);
+                //Join the thread
+                int ret = pthread_join(element->thread_id, NULL);
+                if(ret != 0)
+                {
+                    syslog(LOG_ERR, "Could not join thread: %s", strerror(ret));
+                    continue;  
+                }
+                //Free the memory used by the structure
+                free(element);
+            }
+        }
     }
 
     //Make sure all threads finish and are joined
@@ -606,7 +669,18 @@ void socketserver(int sck)
         }
     }
 
+    ret = pthread_join(timestamp_thread, NULL);
+    if(ret != 0)
+    {
+        syslog(LOG_ERR, "Could not join thread: %s", strerror(ret));
+    }
+
 exit_all:
+    if(sem_destroy(&sem_timestamp) == -1)
+    {
+        syslog(LOG_ERR, "Could not destroy semaphore: %s", strerror(errno));
+    }
+exit_filescktm:
     ret = timer_delete(timer);
     if(ret == -1)
     {
