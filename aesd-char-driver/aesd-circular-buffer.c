@@ -13,6 +13,7 @@
 #else
 #include <string.h>
 #endif
+#include <stdio.h>
 
 #include "aesd-circular-buffer.h"
 
@@ -29,10 +30,53 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
-    /**
-    * TODO: implement per description
-    */
-    return NULL;
+    //Frist check pointers are valid
+    if(!buffer || !entry_offset_byte_rtn)
+        return NULL;
+
+    bool found = false;
+    uint8_t index = buffer->out_offs;
+    struct aesd_buffer_entry *ret = NULL;
+
+    //If the list is full, AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED is the max length
+    int i = 0;
+    if(buffer->full)
+        i = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    //If not full, count how many steps does the out_off need to take to meet with in_off
+    else
+    {
+        if(buffer->in_offs > buffer->out_offs)
+            i = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->in_offs + buffer->out_offs + 1;
+        else if(buffer->in_offs < buffer->out_offs)
+            i = buffer->out_offs - buffer->in_offs;
+        else
+        {
+             return NULL; //List is empty
+        }
+           
+    }
+
+    while(i && !found)
+    {
+        //Check if the current element's size meets the offset requested
+        if(buffer->entry[index].size >= char_offset + 1)
+        {
+            //We found the element to be returned
+            ret = &buffer->entry[index];
+            //The offset within the element is "char_offset"
+            *entry_offset_byte_rtn = char_offset;
+            found = true;
+        }
+        //If doesn't fit, subtract the size of the buffer checked
+        else
+            char_offset -= buffer->entry[index].size;
+
+        i--;
+        index++;
+        index %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+
+    return ret;
 }
 
 /**
@@ -44,9 +88,29 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 */
 void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    /**
-    * TODO: implement per description
-    */
+    //Check inputs
+    if(!buffer || !add_entry)
+        return;
+
+    //This three lines are always performed
+    buffer->entry[buffer->in_offs].size = add_entry->size;
+    buffer->entry[buffer->in_offs].buffptr = add_entry->buffptr;
+    buffer->in_offs++;
+    //Make sure that offsets are within bounds
+    buffer->in_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+
+    //Check if the list has become full
+    if(buffer->in_offs == buffer->out_offs)
+        buffer->full = true;
+    //Increment read pointer too, if the list is full
+    else if(buffer->full)
+    {
+        buffer->out_offs++;
+        buffer->out_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+    
+
+    return;
 }
 
 /**
