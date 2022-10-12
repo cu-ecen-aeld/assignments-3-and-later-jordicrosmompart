@@ -1,14 +1,19 @@
 #This Makefile is used to compile "aesdsocket.c".
 #If "make CROSS_COMPILE=aarch64-none-linux-gnu-" is used, the program will be cross-compiled for the arm64-bit architecture
 
-INCLUDES = ./aesdsocket.c
+SOURCE = ./aesdsocket.c
 OUTPUT = ./aesdsocket
 
-CROSS_COMPILE=
-CC=$(CROSS_COMPILE)gcc
+CROSS_COMPILE =
 
-all: $(INCLUDES)
-	$(CC) -Werror -Wall -g $(INCLUDES) -o $(OUTPUT)
+CC?=$(CROSS_COMPILE)gcc
+CFLAGS?= -g -Wall -Werror
+LDFLAGS?= -pthread -lrt
+
+all: aesdsocket
+
+aesdsocket: $(SOURCE)
+	$(CC) $(CFLAGS) $^ -o $@ $(INCLUDES) $(LDFLAGS)
 
 clean:
 	rm -f $(OUTPUT)
