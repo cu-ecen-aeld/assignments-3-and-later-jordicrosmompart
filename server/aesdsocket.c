@@ -29,8 +29,14 @@
 #include <semaphore.h>
 
 //Defines
+//#define     USE_AESD_CHAR_DEVICE
 #define     SERVER_QUEUE    (10)
+
+#ifdef USE_AESD_CHAR_DEVICE
+#define     LOG_PATH        ("/dev/aesdchar")
+#else
 #define     LOG_PATH        ("/var/tmp/aesdsocketdata")
+#endif
 #define     RECV_BUFF_LEN   (1024)
 
 struct thread_t
@@ -38,7 +44,6 @@ struct thread_t
     pthread_t thread_id;
     int socket_client;
     int socket_server;
-    int log_fd;
     pthread_mutex_t *mutex;
     int finished;
     int *file_size;
@@ -53,7 +58,9 @@ int graceful_exit = 0;
 int file_fd = 0;
 int file_size = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+#ifndef USE_AESD_CHAR_DEVICE
 sem_t sem_timestamp;
+#endif
 
 /**
 * usage
@@ -87,10 +94,13 @@ void signalhandler(int sig)
        graceful_exit = 1;
 
        //Enable semaphore to speed up exit
+#ifndef USE_AESD_CHAR_DEVICE
        sem_post(&sem_timestamp);
+#endif
     }
 }
 
+#ifndef USE_AESD_CHAR_DEVICE
 /**
 * timestamp_handler
 * @brief Handles the time alarm.
@@ -194,6 +204,7 @@ void *timestamp_handler(void *unused)
 
     return NULL;
 }
+#endif
 
 /**
 * print_accepted_conn
@@ -300,11 +311,12 @@ void *serve_client(void *thread_info)
                     goto exit_all;  
                 }
 
-                //Put the contents into /var/tmp/aesdsocketdata
+                //Put the contents into the chosen file
                 //Write the string to the file
-                //Send all the contents read from /var/tmp/aesdsocketdata back to the client
-                
-                if(lseek(thread_info_parsed->log_fd, 0, SEEK_END) == -1)
+                //Send all the contents read from the chosen file back to the client
+
+#ifndef USE_AESD_CHAR_DEVICE
+                if(lseek(file_fd, 0, SEEK_END) == -1)
                 {
                     syslog(LOG_ERR, "Could not get to the end of the file: %s", strerror(errno));
                     ret = pthread_mutex_unlock(thread_info_parsed->mutex);
@@ -314,13 +326,20 @@ void *serve_client(void *thread_info)
                     }
                     goto exit_all;  
                 }
-
+#else
+                file_fd = open(LOG_PATH, O_CREAT | O_RDWR | O_TRUNC, 0666);
+                if(file_fd == -1)
+                {
+                    syslog(LOG_ERR, "Could not create the log file: %s", strerror(errno));
+                    goto exit_all;  
+                }
+#endif
                 int written_bytes;
                 int len_to_write = index;
                 char *ptr_to_write = recv_data;
                 while(len_to_write != 0)
                 {
-                    written_bytes = write(thread_info_parsed->log_fd, ptr_to_write, len_to_write);
+                    written_bytes = write(file_fd, ptr_to_write, len_to_write);
                     if(written_bytes == -1)
                     {
                         //If the error is caused by an interruption of the system call try again
@@ -350,9 +369,9 @@ void *serve_client(void *thread_info)
                 }
 
                 *thread_info_parsed->file_size = *thread_info_parsed->file_size + index;
-
+#ifndef USE_AESD_CHAR_DEVICE
                 //Send all the contents read from /var/tmp/aesdsocketdata back to the client
-                if(lseek(thread_info_parsed->log_fd, 0, SEEK_SET) == -1)
+                if(lseek(file_fd, 0, SEEK_SET) == -1)
                 {
                     syslog(LOG_ERR, "Could not get to the beginning of the file: %s", strerror(errno));
                     ret = pthread_mutex_unlock(thread_info_parsed->mutex);
@@ -362,7 +381,7 @@ void *serve_client(void *thread_info)
                     }
                     goto exit_all; 
                 }
-                
+#endif
                 //Perform reads to send the file contents to the socket client
                 int to_be_sent = *thread_info_parsed->file_size;
                 char buff_read[RECV_BUFF_LEN];
@@ -371,7 +390,7 @@ void *serve_client(void *thread_info)
                 {
                     syslog(LOG_INFO, "To be sent is: %d", to_be_sent);
                     int send_bytes = 0;
-                    int read_bytes = read(thread_info_parsed->log_fd, buff_read, RECV_BUFF_LEN);
+                    int read_bytes = read(file_fd, buff_read, RECV_BUFF_LEN);
                     if(read_bytes != 0)
                         send_bytes = read_bytes;
 
@@ -437,7 +456,15 @@ void *serve_client(void *thread_info)
                     }
                     
                 }
-
+#ifdef USE_AESD_CHAR_DEVICE
+                //Close the file used to log all the data received
+                if(close(file_fd) == -1)
+                {
+                    //Else, error occurred, print it to syslog and finish program
+                    syslog(LOG_ERR, "Could not close log file: %s", strerror(errno));
+                    exit(1);
+                }
+#endif
                 //Reset index to use the malloc'ed buffer from the beginning
                 index = 0;
 
@@ -506,14 +533,13 @@ void socketserver(int sck)
 
     syslog(LOG_INFO, "The server is listening to port 9000");
 
-    //Create the file that will log the messages received
+#ifndef USE_AESD_CHAR_DEVICE
     file_fd = open(LOG_PATH, O_CREAT | O_RDWR | O_TRUNC, 0666);
     if(file_fd == -1)
     {
         syslog(LOG_ERR, "Could not create the log file: %s", strerror(errno));
         goto exit_sck;  
     }
-
     //Create an interval timer to timestamp the file
     struct itimerspec interval_time;
 	struct itimerspec last_interval_time;
@@ -573,7 +599,7 @@ void socketserver(int sck)
         //Implementation defined: wait for next request, not terminate server
         goto exit_all; 
     }
-
+#endif
     //Set up the linked list of threads
     SLIST_HEAD(head_s, thread_t) head;
     //Initialize it
@@ -607,7 +633,6 @@ void socketserver(int sck)
         new->socket_client = connection_fd;
         new->finished = 0;
         new->socket_server = sck;
-        new->log_fd = file_fd;
         new->file_size = &file_size;
         new->mutex = &mutex;
         memcpy((void *) &new->client_addr, (const void *) &client_addr, sizeof(struct sockaddr_storage));
@@ -668,7 +693,7 @@ void socketserver(int sck)
             }
         }
     }
-
+#ifndef USE_AESD_CHAR_DEVICE
     ret = pthread_join(timestamp_thread, NULL);
     if(ret != 0)
     {
@@ -687,7 +712,6 @@ exit_filescktm:
         syslog(LOG_ERR, "Could not create timer: %s", strerror(errno));
         goto exit_filesck; 
     }
-
 exit_filesck:
     //Close the file used to log all the data received
     if(close(file_fd) == -1)
@@ -704,6 +728,7 @@ exit_filesck:
         exit(1);
     }
 exit_sck:
+#endif
     //After stopping to accept requests, the socket can be closed
     if(close(sck) == -1)
     {
