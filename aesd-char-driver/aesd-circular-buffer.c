@@ -40,6 +40,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 
     index = buffer->out_offs;
 
+
     //If the list is full, AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED is the max length
     if(buffer->full)
         i = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
@@ -56,6 +57,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
         }
            
     }
+
 
     while(i && !found)
     {
@@ -94,6 +96,14 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     if(!buffer || !add_entry)
         return ret;
 
+    //Increment read pointer, if the list is full
+    else if(buffer->full)
+    {
+        ret = buffer->entry[buffer->out_offs].buffptr;
+        buffer->out_offs++;
+        buffer->out_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+
     //This three lines are always performed
     buffer->entry[buffer->in_offs].size = add_entry->size;
     buffer->entry[buffer->in_offs].buffptr = add_entry->buffptr;
@@ -104,13 +114,7 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     //Check if the list has become full
     if(buffer->in_offs == buffer->out_offs)
         buffer->full = true;
-    //Increment read pointer too, if the list is full
-    else if(buffer->full)
-    {
-        ret = buffer->entry[buffer->out_offs].buffptr;
-        buffer->out_offs++;
-        buffer->out_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-    }
+
     
 
     return ret;

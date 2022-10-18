@@ -31,7 +31,7 @@ struct aesd_dev aesd_device;
 int aesd_open(struct inode *inode, struct file *filp)
 {
     //Handle open
-    PDEBUG("open");
+    PDEBUG("open\n");
     try_module_get(THIS_MODULE);
 
     return 0;
@@ -40,7 +40,7 @@ int aesd_open(struct inode *inode, struct file *filp)
 int aesd_release(struct inode *inode, struct file *filp)
 {
     //Handle release
-    PDEBUG("release");
+    PDEBUG("release\n");
     module_put(THIS_MODULE);
 
     return 0;
@@ -52,7 +52,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     ssize_t retval = 0;
     size_t  entry_offset = 0;
     struct aesd_buffer_entry *entry = NULL;
-    PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
+    PDEBUG("read %zu bytes with offset %lld\n",count,*f_pos);
     
     //"count" is the number of bytes to be returned
     //"f_pos" is the offset from where to start the read
@@ -65,7 +65,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     //Check for the results
     if(!entry)
     {
-        PDEBUG("Access to aesdchar is returning without contents read");
+        PDEBUG("Access to aesdchar is returning without contents read\n");
         mutex_unlock(&aesd_device.lock);
         *f_pos = 0;
         retval = 0;
@@ -77,12 +77,12 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         //Copy only until the size
         if(copy_to_user(buf, &entry->buffptr[entry_offset],  entry->size - entry_offset) != 0)
         {
-            PDEBUG("Could not copy memory to the user");
+            PDEBUG("Could not copy memory to the user\n");
             mutex_unlock(&aesd_device.lock);
             retval = -EINVAL;
             return retval;
         }
-        *f_pos = entry->size - entry_offset;
+        *f_pos = *f_pos + entry->size;
         retval = entry->size - entry_offset;
     }
     else
@@ -91,12 +91,12 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         //Copy only until the size
         if(copy_to_user(buf, &entry->buffptr[entry_offset],  count) != 0)
         {
-            PDEBUG("Could not copy memory to the user");
+            PDEBUG("Could not copy memory to the user\n");
             mutex_unlock(&aesd_device.lock);
             retval = -EINVAL;
             return retval;
         }
-        *f_pos = count;
+        *f_pos = *f_pos + count;
         retval = count;
     }
 
@@ -111,13 +111,13 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 {
     ssize_t retval = -ENOMEM;
     const char *to_be_freed = NULL;
-    PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
+    PDEBUG("write %zu bytes with offset %lld\n",count,*f_pos);
     
 
     //Check filp and buf validity
     if(!filp || !buf)
     {
-        PDEBUG("Could not reallocate a temporary command");
+        PDEBUG("Could not reallocate a temporary command\n");
         retval = -EINVAL;
         return retval;
     }
@@ -125,7 +125,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     //Check that the count is not 0
     if(!count)
     {
-        PDEBUG("Attempt to write 0 bytes");
+        PDEBUG("Attempt to write 0 bytes\n");
         retval = 0;
         return retval;
     }
@@ -140,7 +140,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                                               sizeof(char)*(aesd_device.partial_size + count), GFP_KERNEL); 
         if(!aesd_device.partial_content)
         {
-            PDEBUG("Could not reallocate a temporary command");
+            PDEBUG("Could not reallocate a temporary command\n");
             mutex_unlock(&aesd_device.lock);
             return retval;
         }
@@ -151,7 +151,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         aesd_device.partial_content = kmalloc(sizeof(char)*count, GFP_KERNEL);
         if(!aesd_device.partial_content)
         {
-            PDEBUG("Could not allocate a temporary command");
+            PDEBUG("Could not allocate a temporary command\n");
             mutex_unlock(&aesd_device.lock);
             return retval;
         }
@@ -160,7 +160,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     //Perform the copy
     if(copy_from_user(&aesd_device.partial_content[aesd_device.partial_size], buf, count) != 0)
     {
-        PDEBUG("Could not copy memory from the user");
+        PDEBUG("Could not copy memory from the user\n");
         mutex_unlock(&aesd_device.lock);
         retval = -EINVAL;
         return retval;
@@ -176,7 +176,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         entry.buffptr = kmalloc(sizeof(char)*aesd_device.partial_size, GFP_KERNEL);
         if(!entry.buffptr)
         {
-            PDEBUG("Not enough memory available");
+            PDEBUG("Not enough memory available\n");
             mutex_unlock(&aesd_device.lock);
             retval = -ENOMEM;
             return retval;
@@ -223,7 +223,7 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
     dev->cdev.ops = &aesd_fops;
     err = cdev_add (&dev->cdev, devno, 1);
     if (err) {
-        printk(KERN_ERR "Error %d adding aesd cdev", err);
+        printk(KERN_ERR "Error %d adding aesd cdev\n", err);
     }
     return err;
 }
