@@ -29,7 +29,7 @@
 #include <semaphore.h>
 
 //Defines
-//#define     USE_AESD_CHAR_DEVICE
+#define     USE_AESD_CHAR_DEVICE
 #define     SERVER_QUEUE    (10)
 
 #ifdef USE_AESD_CHAR_DEVICE
