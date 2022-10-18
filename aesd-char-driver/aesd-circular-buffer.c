@@ -29,16 +29,18 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
+    bool found = false;
+    uint8_t index;
+    struct aesd_buffer_entry *ret = NULL;
+    int i = 0;
+
     //Frist check pointers are valid
     if(!buffer || !entry_offset_byte_rtn)
         return NULL;
 
-    bool found = false;
-    uint8_t index = buffer->out_offs;
-    struct aesd_buffer_entry *ret = NULL;
+    index = buffer->out_offs;
 
     //If the list is full, AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED is the max length
-    int i = 0;
     if(buffer->full)
         i = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     //If not full, count how many steps does the out_off need to take to meet with in_off
@@ -85,11 +87,12 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 * Any necessary locking must be handled by the caller
 * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
 */
-void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
+const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
+    const char *ret = NULL;
     //Check inputs
     if(!buffer || !add_entry)
-        return;
+        return ret;
 
     //This three lines are always performed
     buffer->entry[buffer->in_offs].size = add_entry->size;
@@ -104,12 +107,13 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
     //Increment read pointer too, if the list is full
     else if(buffer->full)
     {
+        ret = buffer->entry[buffer->out_offs].buffptr;
         buffer->out_offs++;
         buffer->out_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
     
 
-    return;
+    return ret;
 }
 
 /**
