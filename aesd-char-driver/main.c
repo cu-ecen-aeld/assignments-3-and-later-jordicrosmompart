@@ -109,7 +109,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = -ENOMEM;
+    ssize_t retval = 0;
     const char *to_be_freed = NULL;
     PDEBUG("write %zu bytes with offset %lld\n",count,*f_pos);
     
@@ -142,6 +142,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         {
             PDEBUG("Could not reallocate a temporary command\n");
             mutex_unlock(&aesd_device.lock);
+            retval = -ENOMEM;
             return retval;
         }
     }
@@ -153,51 +154,62 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         {
             PDEBUG("Could not allocate a temporary command\n");
             mutex_unlock(&aesd_device.lock);
+            retval = -ENOMEM;
             return retval;
         }
     }
     
-    //Perform the copy
-    if(copy_from_user(&aesd_device.partial_content[aesd_device.partial_size], buf, count) != 0)
+    //Check every value in the entry and commit if '\n' is found
+    while(count)
     {
-        PDEBUG("Could not copy memory from the user\n");
-        mutex_unlock(&aesd_device.lock);
-        retval = -EINVAL;
-        return retval;
-    }
-    aesd_device.partial_size += count;
-    retval = count;
+        get_user(aesd_device.partial_content[aesd_device.partial_size], &buf[retval]);
+        retval++;
+        aesd_device.partial_size++;
+        count--;
 
-    //Check if last element is a '\n'
-    if(aesd_device.partial_content[aesd_device.partial_size - 1] == '\n')
-    {
-        //Create the new entry
-        struct aesd_buffer_entry entry;
-        entry.buffptr = kmalloc(sizeof(char)*aesd_device.partial_size, GFP_KERNEL);
-        if(!entry.buffptr)
+        //Check if the copied byte is as '\n'
+        if(aesd_device.partial_content[aesd_device.partial_size - 1] == '\n')
         {
-            PDEBUG("Not enough memory available\n");
-            mutex_unlock(&aesd_device.lock);
-            retval = -ENOMEM;
-            return retval;
+            //Create the new entry
+            struct aesd_buffer_entry entry;
+            entry.buffptr = kmalloc(sizeof(char)*aesd_device.partial_size, GFP_KERNEL);
+            if(!entry.buffptr)
+            {
+                PDEBUG("Not enough memory available\n");
+                mutex_unlock(&aesd_device.lock);
+                retval = -ENOMEM;
+                return retval;
+            }
+            entry.size = aesd_device.partial_size;
+
+            //Copy the contents inside the entry
+            memcpy((void *)entry.buffptr, aesd_device.partial_content, aesd_device.partial_size);
+
+            //Add the entry to the buffer
+            to_be_freed = aesd_circular_buffer_add_entry(&aesd_device.buffer, &entry);
+            //Check if a buffer needs to be freed
+            if(to_be_freed)
+            {
+                kfree(to_be_freed);
+                to_be_freed = NULL;
+            }
+
+            //Free the partial contents
+            kfree(aesd_device.partial_content);
+            aesd_device.partial_size = 0;
+            //Malloc again the remaining count
+            if(count)
+            {
+                aesd_device.partial_content = kmalloc(sizeof(char)*count, GFP_KERNEL);
+                if(!aesd_device.partial_content)
+                {
+                    PDEBUG("Could not allocate a temporary command\n");
+                    mutex_unlock(&aesd_device.lock);
+                    retval = -ENOMEM;
+                    return retval;
+                }
+            }
         }
-        entry.size = aesd_device.partial_size;
-
-        //Copy the contents inside the entry
-        memcpy((void *)entry.buffptr, aesd_device.partial_content, aesd_device.partial_size);
-
-        //Add the entry to the buffer
-        to_be_freed = aesd_circular_buffer_add_entry(&aesd_device.buffer, &entry);
-        //Check if a buffer needs to be freed
-        if(to_be_freed)
-        {
-            kfree(to_be_freed);
-            to_be_freed = NULL;
-        }
-
-        //Free the partial contents
-        kfree(aesd_device.partial_content);
-        aesd_device.partial_size = 0;
     }
 
     //Release mutex
