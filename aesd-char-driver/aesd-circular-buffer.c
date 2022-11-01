@@ -131,6 +131,9 @@ void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer)
     memset(buffer,0,sizeof(struct aesd_circular_buffer));
 }
 
+/**
+* Returns the absolute offset from a buffer number + offset combination
+*/
 loff_t aesd_circular_buffer_getoffset(struct aesd_circular_buffer *buffer, unsigned int buff_number, unsigned int buff_offset)
 {
     int i;
