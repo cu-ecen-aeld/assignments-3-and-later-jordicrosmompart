@@ -58,7 +58,11 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     //"f_pos" is the offset from where to start the read
 
     //Set mutex
-    mutex_lock(&aesd_device.lock);
+    if(mutex_lock_interruptible(&aesd_device.lock))
+    {
+        retval = -EINTR;
+        return retval;
+    }
 
     //Get the entry corresponding to the request
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(&aesd_device.buffer, *f_pos, &entry_offset);
@@ -82,7 +86,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
             retval = -EINVAL;
             return retval;
         }
-        *f_pos = *f_pos + entry->size;
+        *f_pos = *f_pos + entry->size - entry_offset;
         retval = entry->size - entry_offset;
     }
     else
@@ -131,7 +135,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     }
 
     //Set mutex
-    mutex_lock(&aesd_device.lock);
+    if(mutex_lock_interruptible(&aesd_device.lock))
+    {
+        retval = -EINTR;
+        return retval;
+    }
 
     //Check if there is a partial write active
     if(aesd_device.partial_size)
@@ -212,18 +220,51 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         }
     }
 
+    *f_pos = *f_pos + retval;
     //Release mutex
     mutex_unlock(&aesd_device.lock);
 
-
     return retval;
 }
+
+loff_t aesd_llseek(struct file *filp, loff_t offset, int mode)
+{
+    loff_t retval;
+
+    //Check filp and buf validity
+    if(!filp)
+    {
+        PDEBUG("llseek requested without a valid filp\n");
+        retval = -EINVAL;
+        return retval;
+    }
+    
+    if(mutex_lock_interruptible(&aesd_device.lock))
+    {
+        retval = -EINTR;
+        return retval;
+    }
+
+    retval = fixed_size_llseek(filp, offset, mode, aesd_device.buffer.full_size);
+
+    PDEBUG("lseek return value: %lld; offset: %lld;",retval,offset);
+    if(retval == -EINVAL)
+    {
+        PDEBUG("llseek requested with an invalid offset\n");
+    }
+
+    mutex_unlock(&aesd_device.lock);
+    
+    return retval;
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
     .release =  aesd_release,
+    .llseek =   aesd_llseek,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
