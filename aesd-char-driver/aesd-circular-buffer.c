@@ -117,8 +117,6 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     if(buffer->in_offs == buffer->out_offs)
         buffer->full = true;
 
-    printk("Buffer %s has been put into the queue\n", add_entry->buffptr);
-
     return ret;
 }
 
