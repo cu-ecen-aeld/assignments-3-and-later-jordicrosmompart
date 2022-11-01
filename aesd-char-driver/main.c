@@ -20,6 +20,8 @@
 #include <linux/fs.h> // file_operations
 #include <asm/uaccess.h>
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
+
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -258,6 +260,64 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int mode)
     return retval;
 }
 
+static long aesd_adjust_file_offset(struct file *filp,unsigned int write_cmd, unsigned int write_cmd_offset)
+{
+    loff_t offset;
+    long retval;
+
+    if(mutex_lock_interruptible(&aesd_device.lock))
+    {
+        retval = -EINTR;
+        return retval;
+    }
+
+    offset = aesd_circular_buffer_getoffset(&aesd_device.buffer, write_cmd, write_cmd_offset);
+    PDEBUG("Adjusting offset to %lld. Requested buffer number: %d; Requested offset: %d",offset, write_cmd, write_cmd_offset);
+
+    if(offset == -1)
+        retval = -EINVAL;
+    else
+    {
+        filp->f_pos = offset;
+        retval = 0;
+    }
+    mutex_unlock(&aesd_device.lock);
+
+    return retval;
+}
+
+
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    long retval = 0;
+    struct aesd_seekto seekto;
+
+    if(_IOC_TYPE(cmd) != AESD_IOC_MAGIC) 
+        return -EINVAL;
+
+    if(_IOC_NR(cmd) > AESDCHAR_IOC_MAXNR) 
+        return -EINVAL;
+
+    switch(cmd)
+    {
+    case AESDCHAR_IOCSEEKTO:
+        if(copy_from_user(&seekto,(const void __user *)arg,sizeof(struct aesd_seekto))!=0)
+        {
+            retval = -EFAULT;
+        } 
+        else
+        {
+            retval = aesd_adjust_file_offset(filp,seekto.write_cmd, seekto.write_cmd_offset);
+        }
+        break;
+    default:
+        retval = -ENOTTY;
+        break;
+    }
+
+    return retval;
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
@@ -265,6 +325,7 @@ struct file_operations aesd_fops = {
     .open =     aesd_open,
     .release =  aesd_release,
     .llseek =   aesd_llseek,
+    .unlocked_ioctl = aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)

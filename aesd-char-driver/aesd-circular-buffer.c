@@ -130,3 +130,27 @@ void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer)
 {
     memset(buffer,0,sizeof(struct aesd_circular_buffer));
 }
+
+loff_t aesd_circular_buffer_getoffset(struct aesd_circular_buffer *buffer, unsigned int buff_number, unsigned int buff_offset)
+{
+    int i;
+    int offset = 0;
+
+    if(buff_number > AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - 1)
+        return -1;
+
+    if(buff_offset > buffer->entry[buff_number].size - 1)
+        return -1;
+
+    for(i=0; i<buff_number; i++)
+    {
+        if(buffer->entry[i].size == 0)
+        {
+            //Not enough buffers loaded into the circular buffer
+            return -1;
+        }
+        offset += buffer->entry[i].size;
+    }
+    return (offset + buff_offset);
+}
+
