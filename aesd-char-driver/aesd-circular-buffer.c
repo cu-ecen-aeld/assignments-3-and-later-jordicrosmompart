@@ -130,6 +130,7 @@ void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer)
     memset(buffer,0,sizeof(struct aesd_circular_buffer));
 }
 
+#ifdef __KERNEL__
 /**
 * Returns the absolute offset from a buffer number + offset combination
 */
@@ -155,4 +156,5 @@ loff_t aesd_circular_buffer_getoffset(struct aesd_circular_buffer *buffer, unsig
     }
     return (offset + buff_offset);
 }
+#endif
 

@@ -62,7 +62,9 @@ extern const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *b
 
 extern void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer);
 
+#ifdef __KERNEL__
 extern loff_t aesd_circular_buffer_getoffset(struct aesd_circular_buffer *buffer, unsigned int buff_number, unsigned int buff_offset);
+#endif
 
 /**
  * Create a for loop to iterate over each member of the circular buffer.
