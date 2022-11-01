@@ -222,7 +222,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         }
     }
 
-    *f_pos = *f_pos + retval;
     //Release mutex
     mutex_unlock(&aesd_device.lock);
 

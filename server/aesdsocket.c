@@ -27,6 +27,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <semaphore.h>
+#include "aesd_ioctl.h"
 
 //Defines
 #define     USE_AESD_CHAR_DEVICE
@@ -38,6 +39,9 @@
 #define     LOG_PATH        ("/var/tmp/aesdsocketdata")
 #endif
 #define     RECV_BUFF_LEN   (1024)
+
+#define     IOCTL_CMD       ("AESDCHAR_IOCSEEKTO:")
+#define     IOCTL_CMD_LEN   (19)
 
 struct thread_t
 {
@@ -334,41 +338,56 @@ void *serve_client(void *thread_info)
                     goto exit_all;  
                 }
 #endif
-                int written_bytes;
-                int len_to_write = index;
-                char *ptr_to_write = recv_data;
-                while(len_to_write != 0)
+
+                if(strncmp(recv_data, IOCTL_CMD, IOCTL_CMD_LEN) == 0)
                 {
-                    written_bytes = write(file_fd, ptr_to_write, len_to_write);
-                    if(written_bytes == -1)
+                    struct aesd_seekto seekto;
+                    sscanf(recv_data, "AESDCHAR_IOCSEEKTO:%d,%d", &seekto.write_cmd, &seekto.write_cmd_offset);
+
+                    if(ioctl(file_fd, AESDCHAR_IOCSEEKTO, &seekto))
                     {
-                        //If the error is caused by an interruption of the system call try again
-                        if(errno == EINTR)
+                        syslog(LOG_ERR,"Could not perform ioctl command: %s",strerror(errno));
+                    }
+                }
+                else
+                {
+                    int written_bytes;
+                    int len_to_write = index;
+                    char *ptr_to_write = recv_data;
+                    while(len_to_write != 0)
+                    {
+                        written_bytes = write(file_fd, ptr_to_write, len_to_write);
+                        if(written_bytes == -1)
                         {
-                            //Free the mutex
+                            //If the error is caused by an interruption of the system call try again
+                            if(errno == EINTR)
+                            {
+                                //Free the mutex
+                                ret = pthread_mutex_unlock(thread_info_parsed->mutex);
+                                if(ret != 0)
+                                {
+                                    syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
+                                }
+                                continue;
+                            }
+                            
+
+                            //Else, error occurred, print it to syslog and finish program
+                            syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
                             ret = pthread_mutex_unlock(thread_info_parsed->mutex);
                             if(ret != 0)
                             {
                                 syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
                             }
-                            continue;
+                            goto exit_all; 
                         }
-                           
-
-                        //Else, error occurred, print it to syslog and finish program
-                        syslog(LOG_ERR, "Could not write to the file: %s", strerror(errno));
-                        ret = pthread_mutex_unlock(thread_info_parsed->mutex);
-                        if(ret != 0)
-                        {
-                            syslog(LOG_ERR, "Could not unlock mutex: %s", strerror(ret));
-                        }
-                        goto exit_all; 
+                        len_to_write -= written_bytes;
+                        ptr_to_write += written_bytes; 
                     }
-                    len_to_write -= written_bytes;
-                    ptr_to_write += written_bytes; 
-                }
 
-                *thread_info_parsed->file_size = *thread_info_parsed->file_size + index;
+                    *thread_info_parsed->file_size = *thread_info_parsed->file_size + index;
+                }
+                
 #ifndef USE_AESD_CHAR_DEVICE
                 //Send all the contents read from /var/tmp/aesdsocketdata back to the client
                 if(lseek(file_fd, 0, SEEK_SET) == -1)
@@ -384,13 +403,15 @@ void *serve_client(void *thread_info)
 #endif
                 //Perform reads to send the file contents to the socket client
                 int to_be_sent = *thread_info_parsed->file_size;
+                int read_bytes = 1;
                 char buff_read[RECV_BUFF_LEN];
     
-                while(to_be_sent)
+                //Works for both driver and user-space implementations
+                while(to_be_sent && read_bytes)
                 {
                     syslog(LOG_INFO, "To be sent is: %d", to_be_sent);
                     int send_bytes = 0;
-                    int read_bytes = read(file_fd, buff_read, RECV_BUFF_LEN);
+                    read_bytes = read(file_fd, buff_read, RECV_BUFF_LEN);
                     if(read_bytes != 0)
                         send_bytes = read_bytes;
 

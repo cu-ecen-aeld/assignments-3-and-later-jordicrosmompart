@@ -47,17 +47,16 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     //If not full, count how many steps does the out_off need to take to meet with in_off
     else
     {
-        if(buffer->in_offs > buffer->out_offs)
-            i = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->in_offs + buffer->out_offs + 1;
-        else if(buffer->in_offs < buffer->out_offs)
-            i = buffer->out_offs - buffer->in_offs;
+        if(buffer->in_offs < buffer->out_offs)
+            i = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->out_offs + buffer->in_offs + 1;
+        else if(buffer->out_offs < buffer->in_offs)
+            i = buffer->in_offs - buffer->out_offs;
         else
         {
              return NULL; //List is empty
         }
            
     }
-
 
     while(i && !found)
     {
@@ -118,7 +117,7 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     if(buffer->in_offs == buffer->out_offs)
         buffer->full = true;
 
-    
+    printk("Buffer %s has been put into the queue\n", add_entry->buffptr);
 
     return ret;
 }
