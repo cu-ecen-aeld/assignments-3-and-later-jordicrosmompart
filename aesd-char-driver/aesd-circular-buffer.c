@@ -47,17 +47,16 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     //If not full, count how many steps does the out_off need to take to meet with in_off
     else
     {
-        if(buffer->in_offs > buffer->out_offs)
-            i = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->in_offs + buffer->out_offs + 1;
-        else if(buffer->in_offs < buffer->out_offs)
-            i = buffer->out_offs - buffer->in_offs;
+        if(buffer->in_offs < buffer->out_offs)
+            i = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->out_offs + buffer->in_offs + 1;
+        else if(buffer->out_offs < buffer->in_offs)
+            i = buffer->in_offs - buffer->out_offs;
         else
         {
              return NULL; //List is empty
         }
            
     }
-
 
     while(i && !found)
     {
@@ -100,13 +99,16 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     else if(buffer->full)
     {
         ret = buffer->entry[buffer->out_offs].buffptr;
+        buffer->full_size -= buffer->entry[buffer->out_offs].size;
         buffer->out_offs++;
         buffer->out_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        
     }
 
     //This three lines are always performed
     buffer->entry[buffer->in_offs].size = add_entry->size;
     buffer->entry[buffer->in_offs].buffptr = add_entry->buffptr;
+    buffer->full_size += add_entry->size;
     buffer->in_offs++;
     //Make sure that offsets are within bounds
     buffer->in_offs %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
@@ -114,8 +116,6 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     //Check if the list has become full
     if(buffer->in_offs == buffer->out_offs)
         buffer->full = true;
-
-    
 
     return ret;
 }
@@ -127,3 +127,32 @@ void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer)
 {
     memset(buffer,0,sizeof(struct aesd_circular_buffer));
 }
+
+#ifdef __KERNEL__
+/**
+* Returns the absolute offset from a buffer number + offset combination
+*/
+loff_t aesd_circular_buffer_getoffset(struct aesd_circular_buffer *buffer, unsigned int buff_number, unsigned int buff_offset)
+{
+    int i;
+    int offset = 0;
+
+    if(buff_number > AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - 1)
+        return -1;
+
+    if(buff_offset > buffer->entry[buff_number].size - 1)
+        return -1;
+
+    for(i=0; i<buff_number; i++)
+    {
+        if(buffer->entry[i].size == 0)
+        {
+            //Not enough buffers loaded into the circular buffer
+            return -1;
+        }
+        offset += buffer->entry[i].size;
+    }
+    return (offset + buff_offset);
+}
+#endif
+
