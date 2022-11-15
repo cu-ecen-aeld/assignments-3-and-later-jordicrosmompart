@@ -19,6 +19,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include <asm/uaccess.h>
+#include <linux/slab.h>
 #include "aesdchar.h"
 #include "aesd_ioctl.h"
 
